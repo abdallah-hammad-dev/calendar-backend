@@ -1,0 +1,6 @@
+# Secrets and server data: never committed.
+davis/davis.env
+davis/data/
+radicale/cal/
+radicale/.venv/
+*.log
