@@ -79,6 +79,13 @@ Banc : `../davis/` (`run.sh`, Podman, `davis.env` avec le mot de passe admin), e
 | E1 : invitation écrite par `PUT` direct dans le calendrier d'`abd` (organisateur externe) — le cas du backend | ✅ Boutons Accepter / Peut-être / Refuser + notification. Accepter écrit `PARTSTAT=ACCEPTED` dans la copie d'`abd`. Davis tente la réponse à l'organisateur externe et échoue proprement (`SCHEDULE-STATUS=3.7` sur `ORGANIZER`, aucun mail) |
 | E2 : invitation envoyée par un organisateur local (`orga`) | ✅ Livrée dans le calendrier et l'inbox d'`abd`, boutons + notification. « Peut-être » → `TENTATIVE` chez `abd` et chez `orga` (`SCHEDULE-STATUS=2.0`), REPLY dans l'inbox d'`orga`, inbox d'`abd` vidée par iOS |
 | Détail | En répondant, iOS réécrit les lignes `ATTENDEE` (ajoute `CUTYPE`, `EMAIL`, retire `RSVP`) : comparer seulement `PARTSTAT` |
+| E3 (2026-10-22) : `orga` invite `abd`, réponse écrite par le code de l'extension (`setPartstat` + `PUT` `If-Match`), sans iPhone ni backend | ✅ Copie d'`orga` : `PARTSTAT=ACCEPTED;SCHEDULE-STATUS=2.0` pour `abd`, REPLY dans l'inbox d'`orga`. L'invitation a été livrée dans « Tests » (Davis prend un calendrier VEVENT d'`abd`, pas forcément « Général »). Éléments du test supprimés ensuite |
+
+Ce que Davis fait du mail (code de l'image 5.5.0 lu le 2026-10-21) : il **envoie** seulement (iMIP par SMTP,
+`DavisIMipPlugin`, `MAILER_DSN`), toujours depuis `INVITE_FROM_ADDRESS` (une adresse pour tout le serveur, l'invité
+en `Reply-To`). Il ne **lit** aucune boîte : l'IMAP de Davis sert seulement à vérifier les mots de passe
+(`AUTH_METHOD=IMAP`). Un seul email par utilisateur. Récupérer les invitations de Gmail / Outlook et y répondre
+revient donc au backend.
 
 ## Davis — tests de base (2026-10-15)
 

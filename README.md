@@ -11,5 +11,6 @@ Côté serveur du plugin Obsidian calendar-tasks : le serveur CalDAV et son banc
   `TESTS.md`.
 - `start.sh` : relance Davis et Radicale après un redémarrage.
 
-Pas encore fait : le relais d'invitations (Go), le déploiement sur VPS (HTTPS, nom de domaine) et la connexion
-des comptes mail pour récupérer les invitations.
+Pas encore fait : le backend Go (comptes externes en miroir, relais des réponses aux invitations) et le
+déploiement sur VPS (HTTPS, nom de domaine). Tout est décrit dans `docs/SPEC.md` ; notes pour Claude dans
+`CLAUDE.md`.
