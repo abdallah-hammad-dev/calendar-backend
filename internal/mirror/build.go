@@ -17,21 +17,21 @@ import (
 
 // Property names shared with the extension (extension spec §4.6, its src/constants.ts).
 const (
-	PropSourceAccount  = "X-SOURCE-ACCOUNT"  // which account; what makes an event a mirror for the extension
-	PropSourceAttendee = "X-SOURCE-ATTENDEE" // the address that was invited, my ATTENDEE being the Davis one
-	PropRSVPState      = "X-RSVP-STATE"      // pending / confirmed / failed:<reason>, written by the relay
+	PropSourceAccount  = "X-CALTASKS-SOURCE-ACCOUNT"  // which account; what makes an event a mirror for the extension
+	PropSourceAttendee = "X-CALTASKS-SOURCE-ATTENDEE" // the address that was invited, my ATTENDEE being the Davis one
+	PropRSVPState      = "X-CALTASKS-RSVP-STATE"      // pending / confirmed / failed:<reason>, written by the relay
 )
 
 // Target is what a mirror event is written for.
 type Target struct {
-	Account string         // X-SOURCE-ACCOUNT value
+	Account string         // X-CALTASKS-SOURCE-ACCOUNT value
 	Me      string         // my address on Davis (its calendar-user-address-set), written as my ATTENDEE
 	Vault   string         // Obsidian vault name in the URL ("" = no vault parameter: Obsidian's last vault)
 	Loc     *time.Location // where times given in UTC are written
 }
 
 // Base builds the Davis copy of a source event from the source alone (spec §5.2, the part common to all accounts):
-// my ATTENDEE rewritten to the Davis address (the invited one kept in X-SOURCE-ATTENDEE), X-SOURCE-ACCOUNT, the
+// my ATTENDEE rewritten to the Davis address (the invited one kept in X-CALTASKS-SOURCE-ATTENDEE), X-CALTASKS-SOURCE-ACCOUNT, the
 // obsidian:// URL, times in a TZID with their VTIMEZONEs, no METHOD.
 //
 // src is modified: pass a fresh parse. invited is my address on the source account. answer, when not "", is my
@@ -105,7 +105,7 @@ var keptPrefixes = []string{"X-APPLE-", "X-MOZ-"}
 
 // Merge carries into base what a client added to the Davis copy existing and the source knows nothing of: alarms
 // (once a copy exists, its VALARMs are the client's), X-APPLE-* / X-MOZ-* properties, and the relay's
-// X-RSVP-STATE. Components are paired by RECURRENCE-ID. base is modified and returned.
+// X-CALTASKS-RSVP-STATE. Components are paired by RECURRENCE-ID. base is modified and returned.
 func Merge(base, existing *ical.Calendar) *ical.Calendar {
 	if existing == nil {
 		return base

@@ -160,6 +160,10 @@ sur l'iPhone), dans une collection jetable supprimée à la fin.
 | Événement supprimé sur Davis | Oublié, pas recréé tant que la source ne le change pas (provisoire, spec §11) |
 | Passe sans changement | ✅ rien n'est réécrit (même ETag) |
 
+(2026-10-22) Les propriétés partagées avec l'extension portent maintenant le préfixe `X-CALTASKS-`
+(`X-CALTASKS-SOURCE-ACCOUNT`…) ; les résultats plus haut, et les éléments déjà sur le banc, gardent les anciens noms
+(`X-SOURCE-ACCOUNT`…). Ce qui y est vérifié (les `X-` survivent aux modifs de l'iPhone) ne dépend pas du nom.
+
 (2026-10-22, le soir) Chaque compte écrit maintenant dans une collection choisie, qui garde mes propres éléments :
 
 | Test | Résultat |

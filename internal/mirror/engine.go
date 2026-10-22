@@ -401,7 +401,7 @@ func (e *Engine) base(a store.Account, it *store.Item) (*ical.Calendar, string, 
 	return base, Hash(ics.Encode(base)), nil
 }
 
-// owns tells whether a Davis item is one of this account's copies (its X-SOURCE-ACCOUNT).
+// owns tells whether a Davis item is one of this account's copies (its X-CALTASKS-SOURCE-ACCOUNT).
 func (e *Engine) owns(a store.Account, item davis.Item) bool {
 	cal, err := ics.Parse(item.Data)
 	if err != nil {

@@ -5,7 +5,7 @@ CREATE TABLE accounts (
   id           INTEGER PRIMARY KEY,
   kind         TEXT NOT NULL,              -- ics (google, microsoft, caldav later)
   name         TEXT NOT NULL,              -- shown on the accounts page
-  address      TEXT NOT NULL,              -- the address invited on that account (written as X-SOURCE-ATTENDEE)
+  address      TEXT NOT NULL,              -- the address invited on that account (written as X-CALTASKS-SOURCE-ATTENDEE)
   config       TEXT NOT NULL DEFAULT '{}', -- kind-specific JSON (ics: the feed URL; later OAuth tokens)
   collection   TEXT NOT NULL,              -- href of the Davis collection its events go into (mine, chosen; shared
                                            -- with my own events and tasks, and maybe other accounts)

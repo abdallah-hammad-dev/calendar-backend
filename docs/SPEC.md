@@ -40,7 +40,7 @@ notification) and in Obsidian, and my answer leaves from the address that was in
   `PUT`, as long as my `ATTENDEE` address is the Davis user's email (`calendar-user-address-set`). Radicale doesn't
   (no CalDAV scheduling), hence Davis.
 - **Davis holds one email per user**, so the backend writes my `ATTENDEE` with the Davis address and keeps the
-  invited one in `X-SOURCE-ATTENDEE`.
+  invited one in `X-CALTASKS-SOURCE-ATTENDEE`.
 - **Davis sends no mail** while `INVITE_FROM_ADDRESS` is empty: answering an external organizer ends with
   `SCHEDULE-STATUS=3.7` on the `ORGANIZER`, nothing sent. Keep it empty in prod, or Davis would send a second
   (wrong) reply next to the backend's.
@@ -100,7 +100,7 @@ notification) and in Obsidian, and my answer leaves from the address that was in
 - What I give up by mixing: a mirrored event has its collection's color, and an account can't be hidden alone
   (hiding the collection hides everything in it). A dedicated collection keeps both.
 - Mirror events are **read-only except my `PARTSTAT`** (extension spec §4.6), wherever they are: the extension
-  tells them by `X-SOURCE-ACCOUNT` on the event, not by the collection. If a client changes anything else, the
+  tells them by `X-CALTASKS-SOURCE-ACCOUNT` on the event, not by the collection. If a client changes anything else, the
   provider wins at the next sync.
 - **One copy of a meeting I'm invited to on two addresses** whose accounts write into the same collection: Davis
   takes two items with the same `UID` in one collection (tested) and would show both. The first account keeps its
@@ -120,7 +120,7 @@ Every field the extension or the iPhone reads must be copied, or it's missing on
 - `DESCRIPTION` as **plain text**, keeping link targets: Google's `description` is HTML (convert, decode `&amp;`,
   keep each `href`); Microsoft: ask for text with `Prefer: outlook.body-content-type="text"`;
 - `ORGANIZER`, every `ATTENDEE` with its `PARTSTAT`; **mine rewritten to the Davis address**, the invited address
-  in `X-SOURCE-ATTENDEE`;
+  in `X-CALTASKS-SOURCE-ATTENDEE`;
 - `STATUS:CANCELLED` / removal when the organizer cancels;
 - the **meeting link** as `CONFERENCE;VALUE=URI;FEATURE=VIDEO:` (Google: `conferenceData.entryPoints` of type video,
   else `hangoutLink`, Zoom add-on included; Microsoft: `onlineMeeting.joinUrl`). Phone entries may go in
@@ -129,8 +129,9 @@ Every field the extension or the iPhone reads must be copied, or it's missing on
   reads `CONFERENCE` or only links in the place / notes (§11);
 - `URL:obsidian://calendar-tasks?vault=<vault>&uid=<UID>`, the link back to the note (extension spec §4.5); the
   vault name is a backend setting;
-- `X-SOURCE-ACCOUNT` (which account; it's what makes an event a mirror for the extension), `X-RSVP-STATE` (§6).
-  Its value is `<kind>:<address>` (`ics:me@school.fr`); the extension only checks that it's there.
+- `X-CALTASKS-SOURCE-ACCOUNT` (which account; it's what makes an event a mirror for the extension),
+  `X-CALTASKS-RSVP-STATE` (§6). Its value is `<kind>:<address>` (`ics:me@school.fr`); the extension only checks that
+  it's there.
 - The provider's event id for an answer: **a table in the backend's database** (`items.source_id`, decided in B1),
   no `X-SOURCE-ID` on the event.
 
@@ -140,7 +141,7 @@ Rules the mirror applies on top (B1, `internal/mirror/build.go`):
   left alone: making me an attendee would show Accept / Decline on my own event, and a Davis-address `ORGANIZER`
   would make Davis send invitations itself (part 2).
 - **What a client adds is kept** across rewrites: `VALARM`s (once a copy exists, its alarms are the client's),
-  `X-APPLE-*` / `X-MOZ-*` properties, and `X-RSVP-STATE`. Everything else is the source's (the source wins).
+  `X-APPLE-*` / `X-MOZ-*` properties, and `X-CALTASKS-RSVP-STATE`. Everything else is the source's (the source wins).
 - A source's own `URL` goes into `DESCRIPTION` (the extension still finds a meeting link there); `URL` is the
   `obsidian://` link. `METHOD` is dropped (a CalDAV object can't have one), `PRODID` is the backend's.
 - Times in UTC become `TZID=<TIMEZONE>` wall-clock times, **except on a recurring master** (UTC there means the same
@@ -162,8 +163,8 @@ the iPhone follows its own "show declined events" setting.
    `If-Match`).
 2. The backend watches the collections accounts write into (sync-collection; Davis has no push, so polling),
    compares my `PARTSTAT` with the last one it knows, and calls the adapter's `RSVP`.
-3. It writes `X-RSVP-STATE`: `pending`, then `confirmed`, or `failed:<reason>`. The extension shows it under the
-   buttons ("Sent to the organizer.", or why it failed) and removes it when I answer again.
+3. It writes `X-CALTASKS-RSVP-STATE`: `pending`, then `confirmed`, or `failed:<reason>`. The extension shows it under
+   the buttons ("Sent to the organizer.", or why it failed) and removes it when I answer again.
 4. A small "answers in flight" table keeps a provider sync from putting `NEEDS-ACTION` back before the provider
    confirms. (B1: `items.answer`, set when my `PARTSTAT` on Davis differs from the one the backend wrote, used
    instead of the source's until the source shows the same answer. The relay call itself is B3.)
@@ -197,52 +198,53 @@ The provider then notifies the organizer from the invited address, and the next 
 
 ## 9. Part 2: organizing meetings
 
-Asked 2026-10-22: from Obsidian, select a slot, choose the account it's sent from and the video tool, and send the
-invitations, or just get a link to share. **No public booking page** (dropped the same day: not needed).
+Asked 2026-10-22: from Obsidian, select a slot, choose the account it's sent from (its video link with it), and
+send the invitations, or just get a link to share. **No public booking page** (dropped the same day: not needed).
 
 ### 9.1 What I do
 
-- In the calendar I select a slot. The form asks the **account** it's sent from (my connected accounts), the **video
-  tool**, and **guests**, which are optional: with none, it's just a meeting link to send myself (the card gets
-  "Copy link" next to "Join").
+- In the calendar I select a slot. The form asks the **account** it's sent from (my connected accounts), the
+  **video link** (the account's own tool, or none for a meeting in person: a menu of two, not a switch), and
+  **guests**, which are optional: with none, it's just a meeting link to send myself (the card gets "Copy link"
+  next to "Join").
 - The account is pre-filled with the one where the guest already appears in my events (as guest or organizer),
   else from their address's domain (`@school` → the school account); I can change it. Not from my mail (no mail
-  access). The tool is pre-filled with the account's own (below), else the last one used.
+  access). The video link is pre-filled with the account's tool.
 - Later edits work the same way: moving, renaming, adding a guest or deleting an event I organize goes to the
   provider, which sends the update or the cancellation.
 
 ### 9.2 Video tools
 
-The account's own tool is the cleanest: the provider attaches the meeting to the event, and guests get a real
-"Join" button in Gmail / Outlook. Any other link is just a link in the event (still fine).
+**The tool follows the account** (2026-10-22, the user: "si g google je mets meet, si g teams je mets teams et
+basta"): Meet from Google, Teams from Microsoft, nothing else. The provider attaches the meeting to the event, and
+guests get a real "Join" button in Gmail / Outlook.
 
 | Account it's sent from | Its own tool | How |
 |---|---|---|
 | Google | Google Meet | `conferenceData.createRequest` (`hangoutsMeet`), `conferenceDataVersion=1`; same `calendar.events` scope |
 | Microsoft, school | Teams | `isOnlineMeeting: true`, `onlineMeetingProvider: teamsForBusiness`, if the calendar's `allowedOnlineMeetingProviders` has it (tenant policy); same `Calendars.ReadWrite` |
 | Microsoft, personal | probably none | Graph's providers don't seem to include consumer Teams: to test in B5 |
-| Other (CalDAV) | none | a link pasted by hand, or a tool connected apart |
+| Other (CalDAV) | none | |
 
-- **Zoom** would be a tool connected apart (its own OAuth app, `meeting:write`), usable with any account: the
-  backend creates the Zoom meeting and writes its link into the event. Only if I use Zoom (asked 2026-10-22, not
-  answered yet).
-- Meet on an invitation sent from a non-Google account: Google Meet's API (`spaces.create`, one more scope). Later,
-  if wanted.
+- **No Zoom for now** (2026-10-22): it would need its own integration (an app on Zoom's developer site, one more
+  sign-in, the backend creating the meeting). Zoom invitations I *receive* already work: the extension finds the
+  link and shows "Join". If needed one day, the cheapest is a fixed personal room link entered once, offered as a
+  tool, with no API.
 - The scopes asked for reading and answering already cover Meet and Teams links (to confirm in B2 / B5): one
   sign-in per account.
 
 ### 9.3 How it travels (the extension never calls the backend)
 
-1. The extension writes the event into the collection I picked (where it shows, like any event), with its own
-   `UID`, the slot, `ORGANIZER` = me and one `ATTENDEE` per guest **with `SCHEDULE-AGENT=CLIENT`** (RFC 6638: Davis
-   must not send the invitations itself, to test on the bench), the account it's sent from
-   (`X-SEND-ACCOUNT:<kind>:<address>`, as `X-SOURCE-ACCOUNT`) and the tool asked (`X-MEETING-TOOL:google-meet |
-   teams | zoom | none`). The account is the event's, not the collection's: where it shows and who sends it are
-   two choices.
+1. The extension writes the event into the collection I picked (where it shows, like any event), with its own `UID`, the
+   slot, `ORGANIZER` = me and one `ATTENDEE` per guest **with `SCHEDULE-AGENT=CLIENT`** (RFC 6638: Davis must not send
+   the invitations itself, to test on the bench), the account it's sent from
+   (`X-CALTASKS-SEND-ACCOUNT:<kind>:<address>`, as `X-CALTASKS-SOURCE-ACCOUNT`) and the tool asked
+   (`X-CALTASKS-MEETING-TOOL:google-meet | teams | none`). The account is the event's, not the collection's: where it
+   shows and who sends it are two choices.
 2. The backend's Davis watch sees it (it then reads every collection of mine, not only those accounts write into:
-   sync tokens keep that cheap), creates it through the adapter with the tool asked, and writes `X-SEND-STATE`:
+   sync tokens keep that cheap), creates it through the adapter with the tool asked, and writes `X-CALTASKS-SEND-STATE`:
    `pending`, then `sent` or
-   `failed:<reason>` (shown by the extension like `X-RSVP-STATE`). The provider makes the link and sends the
+   `failed:<reason>` (shown by the extension like `X-CALTASKS-RSVP-STATE`). The provider makes the link and sends the
    invitations from my real address.
 3. The next pass writes the provider's version over it (§5.2: `CONFERENCE` with the link, the guests' answers as
    they come). **The event keeps the extension's `UID`** (note links stay valid): the `items` table maps the
@@ -259,7 +261,7 @@ properties it doesn't know); without it, the form has no account choice.
 ### 9.4 Extension changes then
 
 A "Guests" field, the account and tool choices in the new event form, edits allowed on the mirrored events I
-organize, the `X-SEND-STATE` line, "Copy link" on the card.
+organize, the `X-CALTASKS-SEND-STATE` line, "Copy link" on the card.
 
 ## 10. Milestones (in order)
 
@@ -269,7 +271,7 @@ organize, the `X-SEND-STATE` line, "Copy link" on the card.
   against the bench Davis. *Done 2026-10-22*, with the ICS feed adapter as its first source (§4).
 - **B2 — Google, read.** OAuth (localhost first), mirror with the §5.2 checklist, tests on recorded API answers.
   *Needs me: the Google Cloud project.*
-- **B3 — RSVP relay** for Google, `X-RSVP-STATE`, answers in flight.
+- **B3 — RSVP relay** for Google, `X-CALTASKS-RSVP-STATE`, answers in flight.
 - **B4 — Accounts page.**
 - **B5 — Microsoft** (personal, then school: consent test first). *Needs me: the Entra app, the school sign-in.*
 - **B6 — The generic adapter** (§4, once decided).
@@ -290,7 +292,8 @@ organize, the `X-SEND-STATE` line, "Copy link" on the card.
 - One backend for several Davis users (the friend), or one per person?
 - Polling intervals, and later provider push (Google watch channels, Graph subscriptions need a public HTTPS
   endpoint).
-- `X-` property names, fixed together with the extension (extension spec §12), part 2's included
-  (`X-SEND-ACCOUNT`, `X-MEETING-TOOL`, `X-SEND-STATE` are proposals).
-- Zoom: do I use it (§9.2)?
-- Out of scope for now: an MCP endpoint (Claude outside Obsidian), `X-SOURCE-MAIL` (link to the original email).
+- `X-` property names, fixed together with the extension (extension spec §4.7): all prefixed `X-CALTASKS-` (decided
+  2026-10-22, RFC 5545's vendor prefix: no clash with another app's `X-SOURCE-ACCOUNT`); part 2's
+  (`X-CALTASKS-SEND-ACCOUNT`, `X-CALTASKS-MEETING-TOOL`, `X-CALTASKS-SEND-STATE`) are still proposals.
+- Out of scope for now: an MCP endpoint (Claude outside Obsidian), `X-CALTASKS-SOURCE-MAIL` (link to the original
+  email).

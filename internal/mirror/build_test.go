@@ -80,10 +80,10 @@ func TestBase(t *testing.T) {
 			t.Fatal("the invited address is still an ATTENDEE")
 		}
 		if got := ics.Value(ev, PropSourceAttendee); got != "mailto:me@gmail.com" {
-			t.Fatalf("X-SOURCE-ATTENDEE = %q", got)
+			t.Fatalf("X-CALTASKS-SOURCE-ATTENDEE = %q", got)
 		}
 		if got := ics.Value(ev, PropSourceAccount); got != "google:me@gmail.com" {
-			t.Fatalf("X-SOURCE-ACCOUNT = %q", got)
+			t.Fatalf("X-CALTASKS-SOURCE-ACCOUNT = %q", got)
 		}
 		if got := ics.Value(ev, ical.PropURL); got != "obsidian://calendar-tasks?uid=abc123%40google.com&vault=Mon%20coffre" {
 			t.Fatalf("URL = %q", got)

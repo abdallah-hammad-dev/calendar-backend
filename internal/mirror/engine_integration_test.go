@@ -213,7 +213,7 @@ func TestEngineAgainstDavis(t *testing.T) {
 	got0, inv := davisCopy("it-invitation@school.test")
 	ev := ics.Events(inv)[0]
 	if ics.Attendee(ev, e.Me) == nil || ics.Value(ev, PropSourceAttendee) != "mailto:me@school.test" ||
-		!strings.Contains(got0.Data, "\r\nX-SOURCE-ACCOUNT:ics:me@school.test\r\n") {
+		!strings.Contains(got0.Data, "\r\nX-CALTASKS-SOURCE-ACCOUNT:ics:me@school.test\r\n") {
 		t.Fatalf("my attendee not rewritten:\n%s", ics.Encode(inv))
 	}
 	if p := ev.Props.Get(ical.PropDateTimeStart); p.Params.Get("TZID") != "Europe/Paris" || p.Value != "20261123T100000" {
@@ -341,7 +341,7 @@ func TestEngineAgainstDavis(t *testing.T) {
 	if err != nil || it.Href == "" {
 		t.Fatalf("not handed over: %+v %v", it, err)
 	}
-	if got, _ := dc.Get(ctx, it.Href); !strings.Contains(got.Data, "X-SOURCE-ATTENDEE:mailto:me@other.test") {
+	if got, _ := dc.Get(ctx, it.Href); !strings.Contains(got.Data, "X-CALTASKS-SOURCE-ATTENDEE:mailto:me@other.test") {
 		t.Fatalf("the copy isn't the second account's:\n%s", got.Data)
 	}
 

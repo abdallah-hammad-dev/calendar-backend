@@ -88,7 +88,7 @@ DTSTART;TZID=$TZ_NAME:$D1_10
 DUE;TZID=$TZ_NAME:$D1_10
 STATUS:NEEDS-ACTION
 URL:obsidian://calendar-tasks?uid=test-rappel
-X-SOURCE-ACCOUNT:bench
+X-CALTASKS-SOURCE-ACCOUNT:bench
 X-TEST-MARKER:doit-survivre
 DESCRIPTION:Le cocher sur l'iPhone puis lancer ./check.sh\\n\\nobsidian://calendar-tasks?uid=test-rappel
 END:VTODO
@@ -103,7 +103,7 @@ SUMMARY:Test 3 — événement avec lien Obsidian
 DTSTART;TZID=$TZ_NAME:$D1_14
 DTEND;TZID=$TZ_NAME:$D1_15
 URL:obsidian://calendar-tasks?uid=test-evenement
-X-SOURCE-ACCOUNT:bench
+X-CALTASKS-SOURCE-ACCOUNT:bench
 X-SOURCE-ID:abc123
 X-TEST-MARKER:doit-survivre
 DESCRIPTION:Déplacer ou renommer sur l'iPhone puis lancer ./check.sh
