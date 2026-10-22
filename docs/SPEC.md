@@ -12,10 +12,11 @@ Two things running on my VPS, behind HTTPS on my own domain:
   the iPhone and the Obsidian extension both talk to it, nothing else. Already chosen and tested (§3).
 - **The backend** (Go, to write): a robot next to Davis that brings my **other accounts** into it (Gmail,
   Microsoft — personal and school —, any CalDAV account) and carries my answers back:
-  - **mirrors**: each external account's calendar copied into its own Davis collection, kept up to date;
+  - **mirrors**: each external account's calendar copied into the Davis collection I choose for it, kept up to
+    date;
   - **RSVP relay**: when I answer an invitation (iPhone or Obsidian), it sends the answer through that account;
   - **accounts page**: a small web page to add / remove accounts;
-  - later (part 2, §9): **sending my own invitations** from the right account.
+  - later (part 2, §9): **organizing meetings** from the right account, with its video link.
 
 The goal: every invitation reaching any of my addresses shows on the iPhone (Accept / Maybe / Decline + a
 notification) and in Obsidian, and my answer leaves from the address that was invited.
@@ -89,11 +90,22 @@ notification) and in Obsidian, and my answer leaves from the address that was in
 
 ### 5.1 Collections
 
-- One Davis collection per account, e.g. "École (mirror)", created when the account is added, removed with it
-  (after asking). Its name is the account's name as given; its href `mirror-<8 hex>/` under my calendar home;
-  events only (`VEVENT`).
-- Mirror events are **read-only except my `PARTSTAT`** (extension spec §4.6). If a client changes anything else,
-  the provider wins at the next sync.
+- **Each account writes into a collection I choose** (2026-10-22, the user: "c'est à l'utilisateur de choisir où va
+  quoi"): one of mine that holds events, e.g. "École" for the school account, "Général" for Gmail. The backend
+  makes no collection: one only for an account is one I made for it. The collection keeps holding my own events
+  and tasks, and maybe other accounts' events; the backend touches only the items it wrote (the `items` table knows
+  their hrefs), and reads each collection once per pass, whatever the number of accounts writing into it.
+- Removing an account deletes its events from Davis, or leaves them as they are (still marked as mirrored, no
+  longer updated), as I say; the collection stays.
+- What I give up by mixing: a mirrored event has its collection's color, and an account can't be hidden alone
+  (hiding the collection hides everything in it). A dedicated collection keeps both.
+- Mirror events are **read-only except my `PARTSTAT`** (extension spec §4.6), wherever they are: the extension
+  tells them by `X-SOURCE-ACCOUNT` on the event, not by the collection. If a client changes anything else, the
+  provider wins at the next sync.
+- **One copy of a meeting I'm invited to on two addresses** whose accounts write into the same collection: Davis
+  takes two items with the same `UID` in one collection (tested) and would show both. The first account keeps its
+  copy; the other's waits and is written if that copy goes. An item already at the href that isn't the account's
+  (same `UID`, made by me or another client) is left alone.
 - `UID` = the provider's iCalendar UID (`iCalUID` for Google): no duplicates, stable note links.
 - Do not add the Google / Microsoft accounts on the iPhone as well: everything would show twice.
 
@@ -148,8 +160,8 @@ the iPhone follows its own "show declined events" setting.
 
 1. I answer on the iPhone or in Obsidian: my `PARTSTAT` changes in the mirror event on Davis (`PUT` with
    `If-Match`).
-2. The backend watches the mirror collections (sync-collection; Davis has no push, so polling), compares my
-   `PARTSTAT` with the last one it knows, and calls the adapter's `RSVP`.
+2. The backend watches the collections accounts write into (sync-collection; Davis has no push, so polling),
+   compares my `PARTSTAT` with the last one it knows, and calls the adapter's `RSVP`.
 3. It writes `X-RSVP-STATE`: `pending`, then `confirmed`, or `failed:<reason>`. The extension shows it under the
    buttons ("Sent to the organizer.", or why it failed) and removes it when I answer again.
 4. A small "answers in flight" table keeps a provider sync from putting `NEEDS-ACTION` back before the provider
@@ -160,10 +172,10 @@ The provider then notifies the organizer from the invited address, and the next 
 
 ## 7. Accounts page
 
-- "Add account" → Google / Microsoft / Other → sign in (OAuth) or URL + app password → a name and a color → the
-  mirror collection is created. The extension's "Accounts page URL" setting opens this page (its "Add account"
+- "Add account" → Google / Microsoft / Other → sign in (OAuth) or URL + app password → a name and the collection
+  its events go into (one of mine). The extension's "Accounts page URL" setting opens this page (its "Add account"
   button).
-- Lists each account with its state (last sync, last error); remove an account (and its mirror, after asking).
+- Lists each account with its state (last sync, last error); remove an account (and its events, after asking).
 - Not public: behind Cloudflare Access or reachable through Tailscale only.
 - One-time setup per provider, done by me: a Google Cloud project (Calendar API on, OAuth consent "External",
   published), an Entra app registration (personal + any organization accounts). The page shows the redirect URI to
@@ -183,18 +195,71 @@ The provider then notifies the organizer from the invited address, and the next 
   address the backend writes as my `ATTENDEE`.
 - The iPhone account then points to `https://cal.<domain>/dav/` instead of the Tailscale bench.
 
-## 9. Part 2: sending my own invitations
+## 9. Part 2: organizing meetings
 
-- The extension writes an event with my `ORGANIZER` and one `ATTENDEE` per guest: plain CalDAV.
-- It goes from the account I chose: the event is created in that account's mirror collection, and the backend
-  creates it through the provider (Google / Microsoft send the invitations from my real address, collect the
-  answers, and the mirror brings the guests' answers back). Not Davis's SMTP (§3).
+Asked 2026-10-22: from Obsidian, select a slot, choose the account it's sent from and the video tool, and send the
+invitations, or just get a link to share. **No public booking page** (dropped the same day: not needed).
+
+### 9.1 What I do
+
+- In the calendar I select a slot. The form asks the **account** it's sent from (my connected accounts), the **video
+  tool**, and **guests**, which are optional: with none, it's just a meeting link to send myself (the card gets
+  "Copy link" next to "Join").
 - The account is pre-filled with the one where the guest already appears in my events (as guest or organizer),
   else from their address's domain (`@school` → the school account); I can change it. Not from my mail (no mail
-  access).
-- Extension changes then: a "Guests" field; the account choice; mirror collections accept new events and edits to
-  the events I organize.
-- Same booking idea later (public page, slots): extension spec §11.
+  access). The tool is pre-filled with the account's own (below), else the last one used.
+- Later edits work the same way: moving, renaming, adding a guest or deleting an event I organize goes to the
+  provider, which sends the update or the cancellation.
+
+### 9.2 Video tools
+
+The account's own tool is the cleanest: the provider attaches the meeting to the event, and guests get a real
+"Join" button in Gmail / Outlook. Any other link is just a link in the event (still fine).
+
+| Account it's sent from | Its own tool | How |
+|---|---|---|
+| Google | Google Meet | `conferenceData.createRequest` (`hangoutsMeet`), `conferenceDataVersion=1`; same `calendar.events` scope |
+| Microsoft, school | Teams | `isOnlineMeeting: true`, `onlineMeetingProvider: teamsForBusiness`, if the calendar's `allowedOnlineMeetingProviders` has it (tenant policy); same `Calendars.ReadWrite` |
+| Microsoft, personal | probably none | Graph's providers don't seem to include consumer Teams: to test in B5 |
+| Other (CalDAV) | none | a link pasted by hand, or a tool connected apart |
+
+- **Zoom** would be a tool connected apart (its own OAuth app, `meeting:write`), usable with any account: the
+  backend creates the Zoom meeting and writes its link into the event. Only if I use Zoom (asked 2026-10-22, not
+  answered yet).
+- Meet on an invitation sent from a non-Google account: Google Meet's API (`spaces.create`, one more scope). Later,
+  if wanted.
+- The scopes asked for reading and answering already cover Meet and Teams links (to confirm in B2 / B5): one
+  sign-in per account.
+
+### 9.3 How it travels (the extension never calls the backend)
+
+1. The extension writes the event into the collection I picked (where it shows, like any event), with its own
+   `UID`, the slot, `ORGANIZER` = me and one `ATTENDEE` per guest **with `SCHEDULE-AGENT=CLIENT`** (RFC 6638: Davis
+   must not send the invitations itself, to test on the bench), the account it's sent from
+   (`X-SEND-ACCOUNT:<kind>:<address>`, as `X-SOURCE-ACCOUNT`) and the tool asked (`X-MEETING-TOOL:google-meet |
+   teams | zoom | none`). The account is the event's, not the collection's: where it shows and who sends it are
+   two choices.
+2. The backend's Davis watch sees it (it then reads every collection of mine, not only those accounts write into:
+   sync tokens keep that cheap), creates it through the adapter with the tool asked, and writes `X-SEND-STATE`:
+   `pending`, then `sent` or
+   `failed:<reason>` (shown by the extension like `X-RSVP-STATE`). The provider makes the link and sends the
+   invitations from my real address.
+3. The next pass writes the provider's version over it (§5.2: `CONFERENCE` with the link, the guests' answers as
+   they come). **The event keeps the extension's `UID`** (note links stay valid): the `items` table maps the
+   provider's id to it. Creation is idempotent: Google's event `id` derived from the `UID`, Graph's `transactionId`
+   = the `UID`, so a crash between creating and recording can't make two. The event stays in the collection where
+   I made it (its href is recorded), even if the account writes its other events elsewhere.
+4. Edits to an event I organize go to the provider (`sendUpdates=all` on Google). Other edits to mirrored events
+   stay refused (§5.1): the provider's version wins.
+
+To decide when coding: how the extension knows my accounts (address, tools) without asking the backend.
+Proposal: the backend writes them as a property of my calendar home (`PROPPATCH`; to test whether Davis keeps
+properties it doesn't know); without it, the form has no account choice.
+
+### 9.4 Extension changes then
+
+A "Guests" field, the account and tool choices in the new event form, edits allowed on the mirrored events I
+organize, the `X-SEND-STATE` line, "Copy link" on the card.
 
 ## 10. Milestones (in order)
 
@@ -225,5 +290,7 @@ The provider then notifies the organizer from the invited address, and the next 
 - One backend for several Davis users (the friend), or one per person?
 - Polling intervals, and later provider push (Google watch channels, Graph subscriptions need a public HTTPS
   endpoint).
-- `X-` property names, fixed together with the extension (extension spec §12).
+- `X-` property names, fixed together with the extension (extension spec §12), part 2's included
+  (`X-SEND-ACCOUNT`, `X-MEETING-TOOL`, `X-SEND-STATE` are proposals).
+- Zoom: do I use it (§9.2)?
 - Out of scope for now: an MCP endpoint (Claude outside Obsidian), `X-SOURCE-MAIL` (link to the original email).

@@ -2,11 +2,10 @@ package mirror
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-ical"
@@ -17,15 +16,18 @@ import (
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/store"
 )
 
-// Engine runs the passes: each account's source into its mirror collection, and the mirror collections back
+// Engine runs the passes: each account's source into the collection I chose for it, and those collections back
 // (my answers). Passes run one after another, never concurrently.
+//
+// A collection is mine: it also holds my own events and tasks, maybe other accounts' events. The engine only
+// touches the items it wrote (the store knows their hrefs) and leaves everything else alone.
 //
 // Logs carry UIDs and hrefs, never event contents.
 type Engine struct {
 	Store   *store.Store
 	Davis   *davis.Client
 	Me      string // my address on Davis
-	Home    string // my calendar home on Davis, where mirror collections are made
+	Home    string // my calendar home on Davis, where the collections are
 	Vault   string
 	Loc     *time.Location
 	Adapter func(store.Account) (adapter.Adapter, error)
@@ -46,56 +48,106 @@ func (e *Engine) target(a store.Account) Target {
 	return Target{Account: a.Kind + ":" + ics.Address(a.Address), Me: e.Me, Vault: e.Vault, Loc: e.Loc}
 }
 
-// AddAccount creates the account's mirror collection (events only) and records the account.
-func (e *Engine) AddAccount(ctx context.Context, a store.Account) (store.Account, error) {
-	var b [4]byte
-	rand.Read(b[:])
-	a.Collection = e.Home + "mirror-" + hex.EncodeToString(b[:]) + "/"
-	if err := e.Davis.MakeCalendar(ctx, a.Collection, a.Name, a.Color, ical.CompEvent); err != nil {
-		return a, err
-	}
-	id, err := e.Store.AddAccount(ctx, a)
+// ErrCollection: the collection asked for doesn't exist, is ambiguous, or can't hold events.
+var ErrCollection = errors.New("collection")
+
+// Collection finds one of my collections by href or by name (case aside). It must hold events.
+func (e *Engine) Collection(ctx context.Context, nameOrHref string) (davis.Calendar, error) {
+	cals, err := e.Davis.Calendars(ctx, e.Home)
 	if err != nil {
-		e.Davis.Delete(ctx, a.Collection, "")
+		return davis.Calendar{}, err
+	}
+	var found []davis.Calendar
+	var names []string
+	for _, c := range cals {
+		names = append(names, fmt.Sprintf("%q", c.DisplayName))
+		if davis.SamePath(c.Href, nameOrHref) || strings.EqualFold(c.DisplayName, nameOrHref) {
+			found = append(found, c)
+		}
+	}
+	switch {
+	case len(found) == 0:
+		return davis.Calendar{}, fmt.Errorf("%w %q not found; mine: %s", ErrCollection, nameOrHref, strings.Join(names, ", "))
+	case len(found) > 1:
+		return davis.Calendar{}, fmt.Errorf("%w: several are named %q, give its href", ErrCollection, nameOrHref)
+	}
+	c := found[0]
+	for _, comp := range c.Components {
+		if comp == ical.CompEvent {
+			return c, nil
+		}
+	}
+	return davis.Calendar{}, fmt.Errorf("%w %q holds no events (only %s)", ErrCollection, c.DisplayName, strings.Join(c.Components, ", "))
+}
+
+// AddAccount records an account that writes into one of my collections (by name or href). The backend makes no
+// collection: a collection only for this account is one I made for it.
+func (e *Engine) AddAccount(ctx context.Context, a store.Account, collection string) (store.Account, error) {
+	c, err := e.Collection(ctx, collection)
+	if err != nil {
 		return a, err
 	}
-	a.ID = id
-	e.Log.Info("account added", "account", id, "kind", a.Kind, "collection", a.Collection)
+	a.Collection = c.Href
+	if a.ID, err = e.Store.AddAccount(ctx, a); err != nil {
+		return a, err
+	}
+	e.Log.Info("account added", "account", a.ID, "kind", a.Kind, "collection", a.Collection)
 	return a, nil
 }
 
-// RemoveAccount forgets the account, and deletes its mirror collection when asked to.
-func (e *Engine) RemoveAccount(ctx context.Context, a store.Account, deleteCollection bool) error {
-	if deleteCollection {
-		if err := e.Davis.Delete(ctx, a.Collection, ""); err != nil && !errors.Is(err, davis.ErrNotFound) {
+// RemoveAccount forgets the account. Its events are deleted from Davis when asked to; otherwise they stay as they
+// are (still marked as mirrored, so read-only in the extension, and no longer updated).
+func (e *Engine) RemoveAccount(ctx context.Context, a store.Account, deleteEvents bool) error {
+	if deleteEvents {
+		items, err := e.Store.Items(ctx, a.ID)
+		if err != nil {
 			return err
+		}
+		for _, it := range items {
+			if it.Href == "" {
+				continue
+			}
+			if err := e.Davis.Delete(ctx, it.Href, ""); err != nil && !errors.Is(err, davis.ErrNotFound) {
+				return err
+			}
 		}
 	}
 	return e.Store.DeleteAccount(ctx, a.ID)
 }
 
-// Pass runs every account once: the mirror collection first (answers made since the last pass must be seen before
-// the source can overwrite them), then the source when withSource.
+// Pass reads each collection that accounts write into (answers made since the last pass must be seen before a
+// source can overwrite them), then, when withSource, each account's source.
 func (e *Engine) Pass(ctx context.Context, withSource bool) error {
 	accounts, err := e.Store.Accounts(ctx)
 	if err != nil {
 		return err
 	}
-	var errs []error
+	byCollection := map[string][]store.Account{}
+	var order []string
 	for _, a := range accounts {
-		err := e.Watch(ctx, a)
-		if err == nil && withSource {
-			var fresh store.Account // Watch moved its token on
-			if fresh, err = e.Store.Account(ctx, a.ID); err == nil {
-				err = e.Pull(ctx, fresh)
+		if _, ok := byCollection[a.Collection]; !ok {
+			order = append(order, a.Collection)
+		}
+		byCollection[a.Collection] = append(byCollection[a.Collection], a)
+	}
+	var errs []error
+	for _, coll := range order {
+		werr := e.Watch(ctx, coll, byCollection[coll])
+		if werr != nil {
+			e.Log.Warn("collection read failed", "collection", coll, "err", werr)
+		}
+		for _, a := range byCollection[coll] {
+			err := werr
+			if err == nil && withSource {
+				err = e.Pull(ctx, a)
 			}
-		}
-		if err != nil {
-			e.Log.Warn("pass failed", "account", a.ID, "err", err)
-			errs = append(errs, fmt.Errorf("account %d: %w", a.ID, err))
-		}
-		if serr := e.Store.SetSyncResult(ctx, a.ID, err); serr != nil {
-			errs = append(errs, serr)
+			if err != nil {
+				e.Log.Warn("pass failed", "account", a.ID, "err", err)
+				errs = append(errs, fmt.Errorf("account %d: %w", a.ID, err))
+			}
+			if serr := e.Store.SetSyncResult(ctx, a.ID, err); serr != nil {
+				errs = append(errs, serr)
+			}
 		}
 	}
 	return errors.Join(errs...)
@@ -120,7 +172,7 @@ func (e *Engine) Run(ctx context.Context, davisEvery, sourceEvery time.Duration)
 	}
 }
 
-// Pull copies what changed on the account into its mirror collection.
+// Pull copies what changed on the account into its collection.
 func (e *Engine) Pull(ctx context.Context, a store.Account) error {
 	ad, err := e.Adapter(a)
 	if err != nil {
@@ -187,7 +239,62 @@ func (e *Engine) upsert(ctx context.Context, a store.Account, ch adapter.Change)
 		e.Log.Info("answer confirmed by the source", "account", a.ID, "uid", it.UID, "partstat", it.Answer)
 		it.Answer = ""
 	}
+	if it.Href == "" {
+		// Invited on two addresses whose accounts write into the same collection: one copy (Davis takes two items
+		// with the same UID, and shows both). The first account keeps it; this one waits, recorded unwritten
+		// (no base hash), and is written if that copy goes (handOver).
+		taken, err := e.copiedByOther(ctx, a, it.UID)
+		if err != nil {
+			return err
+		}
+		if taken {
+			it.BaseHash = ""
+			return e.Store.PutItem(ctx, it)
+		}
+	}
 	return e.write(ctx, a, &it, nil)
+}
+
+// copiedByOther tells whether another account writing into a's collection has its copy of uid there, or had one
+// that I deleted on Davis (not to be brought back through this account either).
+func (e *Engine) copiedByOther(ctx context.Context, a store.Account, uid string) (bool, error) {
+	others, err := e.Store.ItemsByUID(ctx, uid)
+	if err != nil {
+		return false, err
+	}
+	for _, o := range others {
+		if o.AccountID == a.ID || o.BaseHash == "" { // itself, or another one waiting
+			continue
+		}
+		oa, err := e.Store.Account(ctx, o.AccountID)
+		if err != nil {
+			return false, err
+		}
+		if oa.Collection == a.Collection {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// handOver writes the copy of uid an account was holding back (see upsert) once the copy it deferred to is gone.
+func (e *Engine) handOver(ctx context.Context, collection, uid string) error {
+	waiting, err := e.Store.ItemsByUID(ctx, uid)
+	if err != nil {
+		return err
+	}
+	for _, it := range waiting {
+		if it.Href != "" || it.BaseHash != "" {
+			continue // written, or deleted by me on Davis (not brought back)
+		}
+		a, err := e.Store.Account(ctx, it.AccountID)
+		if err != nil || a.Collection != collection {
+			continue
+		}
+		e.Log.Info("copy handed over", "account", a.ID, "uid", uid)
+		return e.write(ctx, a, &it, nil)
+	}
+	return nil
 }
 
 func (e *Engine) invited(a store.Account, it store.Item) string {
@@ -254,11 +361,15 @@ func (e *Engine) write(ctx context.Context, a store.Account, it *store.Item, cur
 		}
 		etag, err := e.Davis.Put(ctx, href, data, ifMatch)
 		if errors.Is(err, davis.ErrPrecondition) && attempt == 0 {
-			// Changed on Davis meanwhile, or already there (a run stopped before recording its write): read it,
-			// and build again on it.
+			// Changed on Davis meanwhile, or already there: a run stopped before recording its write, or an item
+			// that isn't this account's (same UID, made by me or another client). Only the first is taken over.
 			got, gerr := e.Davis.Get(ctx, href)
 			if gerr != nil {
 				return gerr
+			}
+			if it.Href == "" && !e.owns(a, got) {
+				e.Log.Warn("an item that isn't this account's is already there, left alone", "account", a.ID, "uid", it.UID, "href", href)
+				return nil
 			}
 			it.Href, cur = href, &got
 			e.observe(a, it, got)
@@ -290,6 +401,20 @@ func (e *Engine) base(a store.Account, it *store.Item) (*ical.Calendar, string, 
 	return base, Hash(ics.Encode(base)), nil
 }
 
+// owns tells whether a Davis item is one of this account's copies (its X-SOURCE-ACCOUNT).
+func (e *Engine) owns(a store.Account, item davis.Item) bool {
+	cal, err := ics.Parse(item.Data)
+	if err != nil {
+		return false
+	}
+	for _, ev := range ics.Events(cal) {
+		if ics.Value(ev, PropSourceAccount) == e.target(a).Account {
+			return true
+		}
+	}
+	return false
+}
+
 // observe reads my answer on a Davis copy that changed since the backend wrote it: a PARTSTAT other than the one
 // written is an answer made on the iPhone or in Obsidian (compared alone: iOS rewrites the other parameters).
 func (e *Engine) observe(a store.Account, it *store.Item, got davis.Item) {
@@ -318,29 +443,43 @@ func (e *Engine) remove(ctx context.Context, a store.Account, uid string) error 
 		}
 		e.Log.Info("removed", "account", a.ID, "uid", uid, "href", it.Href)
 	}
-	return e.Store.DeleteItem(ctx, a.ID, uid)
+	if err := e.Store.DeleteItem(ctx, a.ID, uid); err != nil {
+		return err
+	}
+	if it.Href != "" {
+		return e.handOver(ctx, a.Collection, uid)
+	}
+	return nil
 }
 
-// Watch reads what changed in the account's mirror collection since the last pass: my answers, and edits a client
-// made that the source's version replaces (mirror events are read-only except my PARTSTAT, spec §5.1).
-func (e *Engine) Watch(ctx context.Context, a store.Account) error {
-	ch, err := e.Davis.Sync(ctx, a.Collection, a.DavisToken)
+// Watch reads what changed in a collection that accounts write into since the last pass: my answers on their
+// events, and edits a client made that the source's version replaces (mirrored events are read-only except my
+// PARTSTAT, spec §5.1). Everything else there (my own events and tasks) is left alone.
+func (e *Engine) Watch(ctx context.Context, coll string, accounts []store.Account) error {
+	token, err := e.Store.CollectionToken(ctx, coll)
 	if err != nil {
 		return err
+	}
+	ch, err := e.Davis.Sync(ctx, coll, token)
+	if err != nil {
+		return err
+	}
+	byID := map[int64]store.Account{}
+	for _, a := range accounts {
+		byID[a.ID] = a
 	}
 	var errs []error
 	listed := map[string]bool{}
 	for _, item := range ch.Changed {
 		listed[item.Href] = true
-		it, err := e.Store.ItemByHref(ctx, a.ID, item.Href)
+		it, err := e.Store.ItemByHref(ctx, item.Href)
 		if errors.Is(err, store.ErrNotFound) {
-			// Made by a client in a mirror collection: left alone (accepted only in part 2, spec §9).
-			e.Log.Info("event created in a mirror collection, left alone", "account", a.ID, "href", item.Href)
-			continue
+			continue // not a copy the backend made
 		} else if err != nil {
 			return err
 		}
-		if item.ETag == it.ETag {
+		a, ok := byID[it.AccountID]
+		if !ok || item.ETag == it.ETag {
 			continue // the backend's own write
 		}
 		if item.Data == "" {
@@ -359,27 +498,29 @@ func (e *Engine) Watch(ctx context.Context, a store.Account) error {
 	if ch.Full {
 		// A full listing says what's gone by leaving it out. Each is checked, so that one bad answer from the
 		// server can't make the backend forget every copy.
-		items, err := e.Store.Items(ctx, a.ID)
-		if err != nil {
-			return err
-		}
-		for _, it := range items {
-			if it.Href == "" || listed[it.Href] {
-				continue
+		for _, a := range accounts {
+			items, err := e.Store.Items(ctx, a.ID)
+			if err != nil {
+				return err
 			}
-			if _, err := e.Davis.Get(ctx, it.Href); errors.Is(err, davis.ErrNotFound) {
-				removed = append(removed, it.Href)
+			for _, it := range items {
+				if it.Href == "" || listed[it.Href] || !strings.HasPrefix(it.Href, coll) {
+					continue
+				}
+				if _, err := e.Davis.Get(ctx, it.Href); errors.Is(err, davis.ErrNotFound) {
+					removed = append(removed, it.Href)
+				}
 			}
 		}
 	}
 	for _, href := range removed {
-		it, err := e.Store.ItemByHref(ctx, a.ID, href)
+		it, err := e.Store.ItemByHref(ctx, href)
 		if errors.Is(err, store.ErrNotFound) {
 			continue
 		} else if err != nil {
 			return err
 		}
-		e.Log.Info("copy deleted on Davis", "account", a.ID, "uid", it.UID, "href", href)
+		e.Log.Info("copy deleted on Davis", "account", it.AccountID, "uid", it.UID, "href", href)
 		it.Href, it.ETag = "", ""
 		if err := e.Store.PutItem(ctx, it); err != nil {
 			return err
@@ -388,5 +529,5 @@ func (e *Engine) Watch(ctx context.Context, a store.Account) error {
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	return e.Store.SetDavisToken(ctx, a.ID, ch.Token)
+	return e.Store.SetCollectionToken(ctx, coll, ch.Token)
 }

@@ -70,24 +70,22 @@ type Account struct {
 	ID          int64
 	Kind        string
 	Name        string
-	Color       string
 	Address     string
 	Config      string
 	Collection  string
 	SourceToken string
-	DavisToken  string
 	LastSync    time.Time
 	LastError   string
 	Created     time.Time
 }
 
-const accountCols = `id, kind, name, color, address, config, collection, source_token, davis_token, last_sync, last_error, created`
+const accountCols = `id, kind, name, address, config, collection, source_token, last_sync, last_error, created`
 
 func scanAccount(row interface{ Scan(...any) error }) (Account, error) {
 	var a Account
 	var lastSync, created string
-	err := row.Scan(&a.ID, &a.Kind, &a.Name, &a.Color, &a.Address, &a.Config, &a.Collection, &a.SourceToken,
-		&a.DavisToken, &lastSync, &a.LastError, &created)
+	err := row.Scan(&a.ID, &a.Kind, &a.Name, &a.Address, &a.Config, &a.Collection, &a.SourceToken, &lastSync,
+		&a.LastError, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, ErrNotFound
 	}
@@ -97,8 +95,8 @@ func scanAccount(row interface{ Scan(...any) error }) (Account, error) {
 }
 
 func (s *Store) AddAccount(ctx context.Context, a Account) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO accounts (kind, name, color, address, config, collection, created)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, a.Kind, a.Name, a.Color, a.Address, a.Config, a.Collection,
+	res, err := s.db.ExecContext(ctx, `INSERT INTO accounts (kind, name, address, config, collection, created)
+		VALUES (?, ?, ?, ?, ?, ?)`, a.Kind, a.Name, a.Address, a.Config, a.Collection,
 		time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return 0, err
@@ -137,8 +135,19 @@ func (s *Store) SetSourceToken(ctx context.Context, id int64, token string) erro
 	return err
 }
 
-func (s *Store) SetDavisToken(ctx context.Context, id int64, token string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE accounts SET davis_token = ? WHERE id = ?`, token, id)
+// CollectionToken is the sync-collection token of a collection accounts write into (” = never read).
+func (s *Store) CollectionToken(ctx context.Context, href string) (string, error) {
+	var token string
+	err := s.db.QueryRowContext(ctx, `SELECT davis_token FROM collections WHERE href = ?`, href).Scan(&token)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return token, err
+}
+
+func (s *Store) SetCollectionToken(ctx context.Context, href, token string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO collections (href, davis_token) VALUES (?, ?)
+		ON CONFLICT (href) DO UPDATE SET davis_token = excluded.davis_token`, href, token)
 	return err
 }
 
@@ -181,9 +190,27 @@ func (s *Store) Item(ctx context.Context, accountID int64, uid string) (Item, er
 	return scanItem(s.db.QueryRowContext(ctx, `SELECT `+itemCols+` FROM items WHERE account_id = ? AND uid = ?`, accountID, uid))
 }
 
-// ItemByHref finds the mirrored event stored at a Davis href (as the backend wrote it).
-func (s *Store) ItemByHref(ctx context.Context, accountID int64, href string) (Item, error) {
-	return scanItem(s.db.QueryRowContext(ctx, `SELECT `+itemCols+` FROM items WHERE account_id = ? AND href = ?`, accountID, href))
+// ItemByHref finds the mirrored event stored at a Davis href (as the backend wrote it), whichever its account.
+func (s *Store) ItemByHref(ctx context.Context, href string) (Item, error) {
+	return scanItem(s.db.QueryRowContext(ctx, `SELECT `+itemCols+` FROM items WHERE href = ?`, href))
+}
+
+// ItemsByUID lists the copies of one event, one per account that has it (I may be invited on several addresses).
+func (s *Store) ItemsByUID(ctx context.Context, uid string) ([]Item, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+itemCols+` FROM items WHERE uid = ? ORDER BY account_id`, uid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Item
+	for rows.Next() {
+		it, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) Items(ctx context.Context, accountID int64) ([]Item, error) {

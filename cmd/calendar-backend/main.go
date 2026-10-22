@@ -30,8 +30,8 @@ Commands:
   run         pass every DAVIS_INTERVAL (accounts every SOURCE_INTERVAL) until stopped
   once        one pass, accounts included
   accounts    list the accounts and how their last pass went
-  add-feed    add an ICS feed account (read-only): -name, -address, -url, [-color #RRGGBB]
-  remove      remove an account: -id, [-delete-collection] (else its mirror collection stays on Davis)
+  add-feed    add an ICS feed account (read-only): -name, -address, -url, -collection (one of mine, by name or href)
+  remove      remove an account: -id, and -delete-events or -keep-events (what becomes of its events on Davis)
 
 Settings come from the environment, after FILE (default backend.env, if it exists): see backend.env.example.
 `
@@ -94,26 +94,30 @@ func run(ctx context.Context, envFile, cmd string, args []string) error {
 		return e.Pass(ctx, true)
 	case "add-feed":
 		fs := flag.NewFlagSet("add-feed", flag.ExitOnError)
-		name := fs.String("name", "", "the account's name, also its collection's name on Davis")
+		name := fs.String("name", "", "the account's name")
 		address := fs.String("address", "", "my address on that account (the one invited)")
 		url := fs.String("url", "", "the feed: https://…, webcal://… or file:///…")
-		color := fs.String("color", "", "collection color, #RRGGBB")
+		collection := fs.String("collection", "", "the collection of mine its events go into, by name or href")
 		fs.Parse(args)
-		if *name == "" || *address == "" || *url == "" {
-			return errors.New("add-feed: -name, -address and -url are required")
+		if *name == "" || *address == "" || *url == "" || *collection == "" {
+			return errors.New("add-feed: -name, -address, -url and -collection are required")
 		}
 		conf, _ := json.Marshal(feedConfig{URL: *url})
-		a, err := e.AddAccount(ctx, store.Account{Kind: "ics", Name: *name, Color: *color, Address: *address, Config: string(conf)})
+		a, err := e.AddAccount(ctx, store.Account{Kind: "ics", Name: *name, Address: *address, Config: string(conf)}, *collection)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("account %d added, mirrored in %s\n", a.ID, a.Collection)
+		fmt.Printf("account %d added, its events go into %s\n", a.ID, a.Collection)
 		return nil
 	case "remove":
 		fs := flag.NewFlagSet("remove", flag.ExitOnError)
 		id := fs.Int64("id", 0, "the account's id (see: accounts)")
-		del := fs.Bool("delete-collection", false, "also delete its mirror collection on Davis")
+		del := fs.Bool("delete-events", false, "delete its events from Davis")
+		keep := fs.Bool("keep-events", false, "leave its events on Davis (no longer updated)")
 		fs.Parse(args)
+		if *del == *keep {
+			return errors.New("remove: say what becomes of its events: -delete-events or -keep-events")
+		}
 		a, err := st.Account(ctx, *id)
 		if err != nil {
 			return fmt.Errorf("account %d: %w", *id, err)
@@ -122,9 +126,9 @@ func run(ctx context.Context, envFile, cmd string, args []string) error {
 			return err
 		}
 		if *del {
-			fmt.Printf("account %d removed, %s deleted\n", a.ID, a.Collection)
+			fmt.Printf("account %d removed, its events deleted from %s\n", a.ID, a.Collection)
 		} else {
-			fmt.Printf("account %d removed; its collection %s stays on Davis\n", a.ID, a.Collection)
+			fmt.Printf("account %d removed; its events stay in %s\n", a.ID, a.Collection)
 		}
 		return nil
 	}

@@ -135,9 +135,11 @@ le `If-Match` passe. Les ETags dans le corps des `PROPFIND` / `REPORT` (`getetag
 - Le backend envoie `Accept-Encoding: identity` sur toutes ses requêtes (`internal/davis/client.go`) : le client
   HTTP de Go demande gzip par défaut, et le test de bout en bout échouait (412) sur l'invitation (plus de 512
   octets avec son `VTIMEZONE`), pas sur l'événement simple (plus petit).
-- **À vérifier côté extension** : si elle relit un élément par `GET` (quand le `PUT` ne renvoie pas d'ETag) et
-  qu'Obsidian (Electron) demande gzip, l'ETag lu porte `-gzip` et le `PUT` suivant reçoit 412. Les ETags lus par
-  `sync-collection` / `multiget` ne sont pas concernés.
+- **L'extension était touchée** (vérifié le 2026-10-22 par son test d'intégration, le `fetch` de Node demandant gzip,
+  comme le fait très probablement Obsidian, non vérifié) : elle relisait un élément par `GET` quand le `PUT` ne renvoyait pas d'ETag (par exemple après
+  une réponse à une invitation, où Davis ajoute `SCHEDULE-STATUS`), gardait l'ETag en `-gzip`, et le `PUT`
+  suivant du même élément recevait 412 jusqu'à la synchro d'après. Corrigé : `CalDavClient.get` relit par un
+  `calendar-multiget` sur la collection (ETag lu dans le corps).
 - En prod (B0), un proxy devant Davis qui compresse ferait la même chose : ne pas activer la compression sur les
   chemins `/dav/`, ou le savoir.
 
@@ -157,3 +159,13 @@ sur l'iPhone), dans une collection jetable supprimée à la fin.
 | Événement retiré de la source | ✅ supprimé sur Davis |
 | Événement supprimé sur Davis | Oublié, pas recréé tant que la source ne le change pas (provisoire, spec §11) |
 | Passe sans changement | ✅ rien n'est réécrit (même ETag) |
+
+(2026-10-22, le soir) Chaque compte écrit maintenant dans une collection choisie, qui garde mes propres éléments :
+
+| Test | Résultat |
+|---|---|
+| Collection « contexte » (VEVENT + VTODO) avec mon événement et ma tâche, plus les événements d'un compte | ✅ mes éléments jamais touchés (même ETag du début à la fin) |
+| Collection inconnue, ou qui ne contient que des tâches | ✅ refusée à l'ajout du compte, avec la liste de mes collections |
+| **Deux éléments avec le même `UID` dans une collection** (deux `PUT`, adresses différentes) | ⚠️ **Davis accepte les deux** (201, 201) : aucune vérification d'unicité. Le backend l'évite lui-même |
+| Deux comptes dans la même collection, invités à la même réunion sur deux adresses | ✅ une seule copie ; quand le premier compte la perd, celle du second prend le relais |
+| Suppression d'un compte avec ses événements | ✅ seuls les siens sont supprimés |

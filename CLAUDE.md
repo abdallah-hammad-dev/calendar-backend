@@ -40,9 +40,12 @@ backend must write. This repo is private.
   same content compare equal), `Localize` (UTC → TZID, generated `VTIMEZONE`s from Go's zone database).
 - `internal/adapter` — the `Adapter` interface (`List(token)`, `RSVP`), `icsfeed` (read-only ICS feed).
 - `internal/mirror` — `Base` (spec §5.2's rules common to every account), `Merge` (keeps what clients add), the
-  `Engine` (pass = Davis watch, then source pull; answers in flight).
-- `internal/store` — SQLite (modernc, no cgo): `accounts`, `items` (source data, Davis href/etag, partstat written,
-  answer in flight). Migrations by `PRAGMA user_version`; never edit `schema.sql` once deployed.
+  `Engine` (pass = each collection accounts write into read once, then each source; answers in flight; one copy
+  of a meeting two accounts are invited to). Accounts write into a collection the user chose, shared with their
+  own items: the engine touches only the hrefs in `items`.
+- `internal/store` — SQLite (modernc, no cgo): `accounts` (with their collection), `collections` (sync tokens),
+  `items` (source data, Davis href/etag, partstat written, answer in flight). Migrations by `PRAGMA user_version`;
+  never edit `schema.sql` once deployed (not deployed yet: migration 1 was last edited 2026-10-22).
 
 ## Hard rules
 

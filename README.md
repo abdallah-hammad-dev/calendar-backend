@@ -11,13 +11,14 @@ Côté serveur du plugin Obsidian calendar-tasks : le serveur CalDAV, son banc d
   `TESTS.md`.
 - `start.sh` : relance Davis et Radicale après un redémarrage.
 
-- Le backend Go (`cmd/`, `internal/`) : copie les comptes externes dans Davis (une collection miroir par compte)
-  et lit mes réponses aux invitations. Pour l'instant (B1) une seule sorte de compte, un flux ICS publié
+- Le backend Go (`cmd/`, `internal/`) : copie les comptes externes dans Davis, chacun dans la collection que je
+  choisis (« École », « Général »…, à côté de mes propres événements et tâches), et lit mes réponses aux
+  invitations. Pour l'instant (B1) une seule sorte de compte, un flux ICS publié
   (lecture seule) ; Google, Microsoft et le relais des réponses viennent ensuite.
 
 ```bash
 cp backend.env.example backend.env     # utilisateur Davis, mot de passe, nom du coffre Obsidian
-go run ./cmd/calendar-backend add-feed -name "École (miroir)" -address moi@ecole.fr -url https://…/calendar.ics
+go run ./cmd/calendar-backend add-feed -name École -address moi@ecole.fr -url https://…/calendar.ics -collection École
 go run ./cmd/calendar-backend once     # une passe ; « run » tourne en continu
 go run ./cmd/calendar-backend accounts # comptes, dernière synchro, dernière erreur
 go test ./...                          # + DAVIS_TEST_URL=http://127.0.0.1:9000/dav/ pour les tests contre Davis

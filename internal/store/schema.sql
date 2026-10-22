@@ -1,19 +1,24 @@
 -- Migration 1. Once deployed, never edit it: later changes are new entries in `migrations` (store.go).
 
--- An external account mirrored into one Davis collection (spec §4, §5.1).
+-- An external account, copied into the Davis collection I chose for it (spec §4, §5.1).
 CREATE TABLE accounts (
   id           INTEGER PRIMARY KEY,
   kind         TEXT NOT NULL,              -- ics (google, microsoft, caldav later)
-  name         TEXT NOT NULL,              -- shown on the accounts page, and the collection's name
-  color        TEXT NOT NULL DEFAULT '',
+  name         TEXT NOT NULL,              -- shown on the accounts page
   address      TEXT NOT NULL,              -- the address invited on that account (written as X-SOURCE-ATTENDEE)
   config       TEXT NOT NULL DEFAULT '{}', -- kind-specific JSON (ics: the feed URL; later OAuth tokens)
-  collection   TEXT NOT NULL,              -- the mirror collection's href on Davis
+  collection   TEXT NOT NULL,              -- href of the Davis collection its events go into (mine, chosen; shared
+                                           -- with my own events and tasks, and maybe other accounts)
   source_token TEXT NOT NULL DEFAULT '',   -- the provider's sync token ('' = list everything next time)
-  davis_token  TEXT NOT NULL DEFAULT '',   -- sync-collection token of the mirror collection
   last_sync    TEXT NOT NULL DEFAULT '',   -- RFC 3339, last successful pass
   last_error   TEXT NOT NULL DEFAULT '',
   created      TEXT NOT NULL
+);
+
+-- A Davis collection that accounts write into, read once per pass whatever the number of accounts.
+CREATE TABLE collections (
+  href        TEXT PRIMARY KEY,
+  davis_token TEXT NOT NULL DEFAULT ''     -- sync-collection token
 );
 
 -- One mirrored event (master and overrides together, as one Davis item).
