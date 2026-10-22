@@ -123,3 +123,37 @@ supprimer (DELETE) une collection marchent sur Davis et Radicale (test d'intégr
 ont été fusionnées par `MOVE` dans « Général » (VEVENT + VTODO, `#0090FF`), puis supprimées ; il reste
 « Général » et « Tests » (mixte). **À vérifier sur l'iPhone** : « Général » apparaît à la fois dans Calendrier et
 dans Rappels ; Davis ne recrée pas de calendrier par défaut ; iOS ne recrée pas sa liste.
+
+## Davis — ETag et compression (2026-10-22)
+
+Le Caddy de l'image `davis-standalone` (`encode zstd gzip`) compresse les réponses de plus de 512 octets quand le
+client le demande, et **ajoute alors `-gzip` (ou `-zstd`) à l'en-tête `ETag`** : un `GET` avec
+`Accept-Encoding: gzip` d'un élément de 1 ko répond `ETag: "4bdc…578f-gzip"`, et un `PUT` avec ce `If-Match` reçoit
+**412**. Sans compression (`Accept-Encoding: identity`, ou un élément de moins de 512 octets) l'ETag est le vrai et
+le `If-Match` passe. Les ETags dans le corps des `PROPFIND` / `REPORT` (`getetag`) ne sont pas touchés.
+
+- Le backend envoie `Accept-Encoding: identity` sur toutes ses requêtes (`internal/davis/client.go`) : le client
+  HTTP de Go demande gzip par défaut, et le test de bout en bout échouait (412) sur l'invitation (plus de 512
+  octets avec son `VTIMEZONE`), pas sur l'événement simple (plus petit).
+- **À vérifier côté extension** : si elle relit un élément par `GET` (quand le `PUT` ne renvoie pas d'ETag) et
+  qu'Obsidian (Electron) demande gzip, l'ETag lu porte `-gzip` et le `PUT` suivant reçoit 412. Les ETags lus par
+  `sync-collection` / `multiget` ne sont pas concernés.
+- En prod (B0), un proxy devant Davis qui compresse ferait la même chose : ne pas activer la compression sur les
+  chemins `/dav/`, ou le savoir.
+
+## Backend B1 contre Davis (2026-10-22)
+
+`DAVIS_TEST_URL=http://127.0.0.1:9000/dav/ go test ./...`, en tant qu'`orga` (jamais `abd`, dont le compte est
+sur l'iPhone), dans une collection jetable supprimée à la fin.
+
+| Test | Résultat |
+|---|---|
+| Client : découverte, `MKCALENDAR` (nom, couleur, VEVENT seul), `PUT` `If-None-Match` / `If-Match`, `sync-collection` | ✅ `calendar-data` est bien renvoyé dans le `sync-collection` de sabre (pas besoin de `multiget`) ; l'ETag du `PUT` est celui du `GET` et du `sync-collection` |
+| Jeton inconnu au préfixe de sabre (`http://sabre.io/ns/sync/999999`) | ✅ sabre répond « rien de changé » + le même jeton ; détecté par le jeton courant de la collection, liste complète |
+| Jeton d'un autre serveur (`urn:other:token`) | ✅ refusé par sabre, liste complète |
+| Miroir d'un flux ICS : invitation, événement simple, série avec exception | ✅ mon `ATTENDEE` réécrit avec l'adresse Davis, `X-SOURCE-ATTENDEE`, `X-SOURCE-ACCOUNT`, `URL:obsidian://…`, heures UTC passées en `TZID=Europe/Paris` + `VTIMEZONE` |
+| Réponse « depuis l'iPhone » (`PARTSTAT=ACCEPTED`, paramètres réécrits comme iOS, un `VALARM` ajouté) | ✅ vue par le backend, gardée quand la source change le titre (réponse « en vol »), oubliée quand la source la montre ; l'alarme est gardée |
+| Un client renomme un événement miroir | ✅ la source l'emporte à la passe suivante |
+| Événement retiré de la source | ✅ supprimé sur Davis |
+| Événement supprimé sur Davis | Oublié, pas recréé tant que la source ne le change pas (provisoire, spec §11) |
+| Passe sans changement | ✅ rien n'est réécrit (même ETag) |

@@ -1,6 +1,6 @@
 # calendar-backend
 
-Côté serveur du plugin Obsidian calendar-tasks : le serveur CalDAV et son banc de test.
+Côté serveur du plugin Obsidian calendar-tasks : le serveur CalDAV, son banc de test et le backend Go.
 
 - `davis/` : Davis (sabre/dav, avec le scheduling des invitations), le serveur retenu. Lancé en Podman rootless
   sur `127.0.0.1:9000` par `run.sh`. Copier `davis.env.example` en `davis.env` et remplir les secrets ; la base
@@ -11,6 +11,17 @@ Côté serveur du plugin Obsidian calendar-tasks : le serveur CalDAV et son banc
   `TESTS.md`.
 - `start.sh` : relance Davis et Radicale après un redémarrage.
 
-Pas encore fait : le backend Go (comptes externes en miroir, relais des réponses aux invitations) et le
-déploiement sur VPS (HTTPS, nom de domaine). Tout est décrit dans `docs/SPEC.md` ; notes pour Claude dans
-`CLAUDE.md`.
+- Le backend Go (`cmd/`, `internal/`) : copie les comptes externes dans Davis (une collection miroir par compte)
+  et lit mes réponses aux invitations. Pour l'instant (B1) une seule sorte de compte, un flux ICS publié
+  (lecture seule) ; Google, Microsoft et le relais des réponses viennent ensuite.
+
+```bash
+cp backend.env.example backend.env     # utilisateur Davis, mot de passe, nom du coffre Obsidian
+go run ./cmd/calendar-backend add-feed -name "École (miroir)" -address moi@ecole.fr -url https://…/calendar.ics
+go run ./cmd/calendar-backend once     # une passe ; « run » tourne en continu
+go run ./cmd/calendar-backend accounts # comptes, dernière synchro, dernière erreur
+go test ./...                          # + DAVIS_TEST_URL=http://127.0.0.1:9000/dav/ pour les tests contre Davis
+```
+
+Pas encore fait : les comptes Google / Microsoft, le relais des réponses, la page des comptes, le déploiement sur
+VPS (HTTPS, nom de domaine). Tout est décrit dans `docs/SPEC.md` ; notes pour Claude dans `CLAUDE.md`.

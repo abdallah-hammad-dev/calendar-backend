@@ -4,3 +4,6 @@ davis/data/
 radicale/cal/
 radicale/.venv/
 *.log
+backend.env
+.env
+/data/

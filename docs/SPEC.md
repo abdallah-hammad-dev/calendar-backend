@@ -77,6 +77,9 @@ notification) and in Obsidian, and my answer leaves from the address that was in
   Thunderbird passes. Test early. Plan B: publish the school calendar as an ICS link (Outlook web → Calendar →
   Shared calendars → Publish) read by a read-only "ICS feed" adapter, answers kept locally and not sent; or forward
   to a personal Microsoft account if the school allows external forwarding.
+- **ICS feed** (B1, `internal/adapter/icsfeed`): a published `https://` / `webcal://` link (or a `file://` for
+  tests), read whole at each pass (its hash is the "sync token"), read-only: answers stay on Davis, not sent. It is
+  the plan B above, and what B1 runs with.
 - **Open: the third, generic kind.** CalDAV (above, the recap's choice) covers accounts that have a calendar. The
   alternative is IMAP + SMTP (read invitation emails, answer by mail from that address): it covers *any* address,
   even without a calendar, but means parsing emails, and changes and cancellations arrive as emails too. To decide
@@ -87,7 +90,8 @@ notification) and in Obsidian, and my answer leaves from the address that was in
 ### 5.1 Collections
 
 - One Davis collection per account, e.g. "École (mirror)", created when the account is added, removed with it
-  (after asking).
+  (after asking). Its name is the account's name as given; its href `mirror-<8 hex>/` under my calendar home;
+  events only (`VEVENT`).
 - Mirror events are **read-only except my `PARTSTAT`** (extension spec §4.6). If a client changes anything else,
   the provider wins at the next sync.
 - `UID` = the provider's iCalendar UID (`iCalUID` for Google): no duplicates, stable note links.
@@ -114,8 +118,26 @@ Every field the extension or the iPhone reads must be copied, or it's missing on
 - `URL:obsidian://calendar-tasks?vault=<vault>&uid=<UID>`, the link back to the note (extension spec §4.5); the
   vault name is a backend setting;
 - `X-SOURCE-ACCOUNT` (which account; it's what makes an event a mirror for the extension), `X-RSVP-STATE` (§6).
-- How the backend finds the provider's event id for an answer (`X-SOURCE-ID` on the event, as in the recap, or a
-  table in its database): decide when coding.
+  Its value is `<kind>:<address>` (`ics:me@school.fr`); the extension only checks that it's there.
+- The provider's event id for an answer: **a table in the backend's database** (`items.source_id`, decided in B1),
+  no `X-SOURCE-ID` on the event.
+
+Rules the mirror applies on top (B1, `internal/mirror/build.go`):
+
+- **The `ORGANIZER` is never rewritten**, and when it is me (an event I organize on that account) my `ATTENDEE` is
+  left alone: making me an attendee would show Accept / Decline on my own event, and a Davis-address `ORGANIZER`
+  would make Davis send invitations itself (part 2).
+- **What a client adds is kept** across rewrites: `VALARM`s (once a copy exists, its alarms are the client's),
+  `X-APPLE-*` / `X-MOZ-*` properties, and `X-RSVP-STATE`. Everything else is the source's (the source wins).
+- A source's own `URL` goes into `DESCRIPTION` (the extension still finds a meeting link there); `URL` is the
+  `obsidian://` link. `METHOD` is dropped (a CalDAV object can't have one), `PRODID` is the backend's.
+- Times in UTC become `TZID=<TIMEZONE>` wall-clock times, **except on a recurring master** (UTC there means the same
+  instant every week, which a TZID would shift across DST); `RECURRENCE-ID`, `EXDATE`, `RDATE`, `UNTIL` are never
+  touched. A `VTIMEZONE` is added for every TZID without one, generated from Go's zone database (same rules as
+  the bench's hand-written Europe/Paris, tested).
+- An item is written only when the copy built from the source changed (hash) or a client changed the Davis copy.
+- An empty full listing from a source is believed only the second time in a row (as the extension does), so one bad
+  answer can't delete every mirrored event.
 
 ### 5.3 Declined
 
@@ -131,7 +153,8 @@ the iPhone follows its own "show declined events" setting.
 3. It writes `X-RSVP-STATE`: `pending`, then `confirmed`, or `failed:<reason>`. The extension shows it under the
    buttons ("Sent to the organizer.", or why it failed) and removes it when I answer again.
 4. A small "answers in flight" table keeps a provider sync from putting `NEEDS-ACTION` back before the provider
-   confirms.
+   confirms. (B1: `items.answer`, set when my `PARTSTAT` on Davis differs from the one the backend wrote, used
+   instead of the source's until the source shows the same answer. The relay call itself is B3.)
 
 The provider then notifies the organizer from the invited address, and the next sync brings the state back.
 
@@ -152,6 +175,8 @@ The provider then notifies the organizer from the invited address, and the next 
 - **Domain** at Cloudflare (or reuse the website's), subdomains such as `cal.` (Davis) and one for the backend;
   HTTPS with Let's Encrypt (also required for OAuth redirect URIs outside localhost). Minecraft stays "DNS only":
   Cloudflare's proxy only handles HTTP.
+- **No compression on `/dav/`** in the reverse proxy: Caddy then appends `-gzip` to `ETag` headers and `If-Match`
+  fails (412, `bench/TESTS.md`). Davis's own Caddy already does it when asked; the backend asks for none.
 - **Easy to (re)deploy**: one compose file (Davis, backend, a reverse proxy with automatic HTTPS) and one `.env`
   for secrets; Davis on SQLite in a volume; backups of Davis's and the backend's databases.
 - Davis settings as in `davis/davis.env.example` (`INVITE_FROM_ADDRESS` empty). The Davis user's email is the
@@ -176,7 +201,7 @@ The provider then notifies the organizer from the invited address, and the next 
 - **B0 — Deploy Davis.** Compose + reverse proxy + domain on the VPS; move my data from the bench; the iPhone and
   Obsidian on the real address. *Needs me: the domain, VPS access.*
 - **B1 — Go skeleton.** Config, SQLite, Davis CalDAV client (write mirror events, sync-collection), runs locally
-  against the bench Davis.
+  against the bench Davis. *Done 2026-10-22*, with the ICS feed adapter as its first source (§4).
 - **B2 — Google, read.** OAuth (localhost first), mirror with the §5.2 checklist, tests on recorded API answers.
   *Needs me: the Google Cloud project.*
 - **B3 — RSVP relay** for Google, `X-RSVP-STATE`, answers in flight.
@@ -192,7 +217,11 @@ The provider then notifies the organizer from the invited address, and the next 
 - Generic adapter: CalDAV or IMAP + SMTP (§4).
 - Does Apple Calendar show its "Join" button for a `CONFERENCE`-only event? (bench: one event with `CONFERENCE`
   only, one with the link in the notes.)
-- Deleting a mirrored invitation on the iPhone: decline it, or bring it back at the next sync?
+- Deleting a mirrored invitation on the iPhone: decline it, or bring it back at the next sync? (B1, provisional:
+  forgotten on Davis, brought back only when the source changes the event.)
+- `SCHEDULE-AGENT=CLIENT` on the `ORGANIZER` of mirror events would stop Davis's own scheduling on them (the
+  `SCHEDULE-STATUS=3.7` attempts, and a REPLY *delivered* if the organizer happens to be a user of the same Davis).
+  Bench test needed: does the iPhone still show Accept / Maybe / Decline then?
 - One backend for several Davis users (the friend), or one per person?
 - Polling intervals, and later provider push (Google watch channels, Graph subscriptions need a public HTTPS
   endpoint).
