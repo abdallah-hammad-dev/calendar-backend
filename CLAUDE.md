@@ -36,8 +36,11 @@ backend must write. This repo is private.
 - `cmd/calendar-backend` — CLI: settings, discovery of my principal (its email = my `ATTENDEE`), commands.
 - `internal/davis` — hand-written CalDAV client for Davis: discovery, `MKCALENDAR`, conditional `PUT`/`DELETE`,
   `sync-collection` (with sabre's unknown-token quirk, as in the extension). Always `Accept-Encoding: identity`.
+  HTTP calls (Davis and feeds) give up after 2 minutes: one server that never answers stopped every pass.
 - `internal/ics` — go-ical's decoder, our encoder (folding at 75 octets, sorted properties: two encodings of the
-  same content compare equal), `Localize` (UTC → TZID, generated `VTIMEZONE`s from Go's zone database).
+  same content compare equal), `Localize` (UTC → TZID, generated `VTIMEZONE`s from Go's zone database). Never let
+  Go's map order reach the output: `Localize` read properties in map order and gave the same event another text from
+  pass to pass (2026-10-28, `TestLocalizeIsStable`).
 - `internal/adapter` — the `Adapter` interface (`List(token)`, `RSVP`), `icsfeed` (read-only ICS feed).
 - `internal/mirror` — `Base` (spec §5.2's rules common to every account), `Merge` (keeps what clients add), the
   `Engine` (pass = each collection accounts write into read once, then each source; answers in flight; one copy
@@ -51,6 +54,9 @@ backend must write. This repo is private.
 
 - Secrets never committed: `davis/davis.env`, `davis/data/`, OAuth tokens, `.env` files (see `.gitignore`).
 - Davis's `INVITE_FROM_ADDRESS` stays empty: the backend relays answers, Davis must not send a second one.
+- Davis's `LOG_FILE_PATH` stays `/dev/null`: its error log copies the request's headers, the password included.
+- Errors that may carry a feed URL go through `scrub` (`internal/adapter/icsfeed`): Go's `*url.Error` repeats the
+  whole URL, secret included.
 - Write times with `TZID` + `VTIMEZONE`, never UTC (iOS shows a second "(GMT)" time).
 - Compare only `PARTSTAT` on my `ATTENDEE` (iOS rewrites the other parameters).
 - Bench tests write only to bench users (`abd`, `orga`) and delete what they create; the user's real collections on

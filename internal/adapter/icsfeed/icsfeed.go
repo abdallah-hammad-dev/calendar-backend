@@ -7,12 +7,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/emersion/go-ical"
 
@@ -21,9 +23,12 @@ import (
 )
 
 type Feed struct {
-	URL  string // http(s)://… or file:///…
-	HTTP *http.Client
+	URL  string       // http(s)://… or file:///…
+	HTTP *http.Client // nil = defaultHTTP
 }
+
+// defaultHTTP gives up after two minutes: a feed that never answers would stop every pass, silently.
+var defaultHTTP = &http.Client{Timeout: 2 * time.Minute}
 
 // List fetches the whole feed every time: a feed has no sync token. The token returned is a hash of the feed, so
 // an unchanged feed gives an empty page.
@@ -99,7 +104,7 @@ func Split(cal *ical.Calendar) []adapter.Change {
 func (f *Feed) fetch(ctx context.Context) ([]byte, error) {
 	u, err := url.Parse(f.URL)
 	if err != nil {
-		return nil, fmt.Errorf("feed: bad URL: %w", err)
+		return nil, fmt.Errorf("feed: bad URL: %w", scrub(err))
 	}
 	switch u.Scheme {
 	case "file":
@@ -110,15 +115,15 @@ func (f *Feed) fetch(ctx context.Context) ([]byte, error) {
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("feed %s: %w", f.redacted(), scrub(err))
 		}
 		hc := f.HTTP
 		if hc == nil {
-			hc = http.DefaultClient
+			hc = defaultHTTP
 		}
 		resp, err := hc.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("feed %s: %w", f.redacted(), err)
+			return nil, fmt.Errorf("feed %s: %w", f.redacted(), scrub(err))
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
@@ -127,6 +132,15 @@ func (f *Feed) fetch(ctx context.Context) ([]byte, error) {
 		return io.ReadAll(io.LimitReader(resp.Body, 50<<20))
 	}
 	return nil, fmt.Errorf("feed: unsupported URL scheme %q", u.Scheme)
+}
+
+// scrub keeps the feed's secret out of an error: Go's *url.Error repeats the whole URL ("Get \"https://…\": …").
+func scrub(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
 }
 
 // redacted is the feed's URL for messages: published calendar links carry their secret in the path or query.

@@ -143,6 +143,18 @@ le `If-Match` passe. Les ETags dans le corps des `PROPFIND` / `REPORT` (`getetag
 - En prod (B0), un proxy devant Davis qui compresse ferait la même chose : ne pas activer la compression sur les
   chemins `/dav/`, ou le savoir.
 
+## Davis — son journal recopie le mot de passe (2026-10-28)
+
+En `APP_ENV=prod`, Davis journalise chaque exception sabre (404, 412, 403 « sync token » : normales en synchro) avec
+sa trace, et le gestionnaire `fingers_crossed` de Monolog vide alors tout son tampon : la requête entière y est
+recopiée, **en-têtes compris, dont `Php-Auth-Pw` en clair** (174 occurrences dans `var/log/prod.log` du banc, vérifié
+sans afficher les valeurs). La base, elle, ne garde qu'une empreinte (`users.digesta1`, MD5 de
+`user:realm:mot de passe` : faible, d'où des mots de passe longs et aléatoires en prod).
+
+- `LOG_FILE_PATH=/dev/null` (variable lue par le `monolog.yaml` de l'image) : plus aucun fichier ; un `PUT` refusé
+  (412) ne laisse rien, ni dans `var/log/` ni dans `podman logs` (vérifié le 2026-10-28). Davis fonctionne normalement.
+- Le journal vit dans le conteneur, pas dans `data/` : `run.sh` le recrée à chaque lancement, l'ancien part avec.
+
 ## Backend B1 contre Davis (2026-10-22)
 
 `DAVIS_TEST_URL=http://127.0.0.1:9000/dav/ go test ./...`, en tant qu'`orga` (jamais `abd`, dont le compte est

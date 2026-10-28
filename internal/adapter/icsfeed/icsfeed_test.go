@@ -84,3 +84,15 @@ func TestRedacted(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestErrorsKeepTheSecret(t *testing.T) {
+	for _, u := range []string{
+		"https://127.0.0.1:1/owa/calendar/SECRET/calendar.ics?k=SECRET", // nothing listens: Go's error names the URL
+		"https://host/SECRET/%zz.ics",                                   // unreadable
+	} {
+		_, err := (&Feed{URL: u}).List(context.Background(), "")
+		if err == nil || strings.Contains(err.Error(), "SECRET") {
+			t.Fatalf("%s: %v", u, err)
+		}
+	}
+}

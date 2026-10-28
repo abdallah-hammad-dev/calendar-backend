@@ -2,6 +2,7 @@ package ics
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -53,8 +54,15 @@ func Localize(cal *ical.Calendar, loc *time.Location) []string {
 	used := map[string]time.Time{} // TZID → a time it is used at (the generated rules are the ones in force then)
 	var order []string
 	for _, ev := range Events(cal) {
-		for _, props := range ev.Props {
-			for _, p := range props {
+		// By name, not in map order: the same event must give the same zones, in the same order, every time (the
+		// mirror skips rewriting by comparing hashes).
+		names := make([]string, 0, len(ev.Props))
+		for name := range ev.Props {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			for _, p := range ev.Props[name] {
 				tzid := p.Params.Get(ical.PropTimezoneID)
 				if tzid == "" || defined[tzid] {
 					continue

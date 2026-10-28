@@ -15,6 +15,9 @@ import (
 	"syscall"
 	"text/tabwriter"
 	"time"
+	// The zone database inside the binary: a minimal container has none, and events' zones would then go out
+	// without their VTIMEZONE.
+	_ "time/tzdata"
 
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/adapter"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/adapter/icsfeed"

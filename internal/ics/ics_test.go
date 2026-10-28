@@ -214,3 +214,40 @@ END:VCALENDAR
 		t.Fatalf("%d VTIMEZONEs after a second run", n)
 	}
 }
+
+// The same event gives the same text every time: the mirror compares hashes to skip rewriting what didn't change.
+func TestLocalizeIsStable(t *testing.T) {
+	paris, _ := time.LoadLocation("Europe/Paris")
+	src := crlf(`
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:x
+BEGIN:VEVENT
+UID:flight
+DTSTAMP:20261020T080000Z
+DTSTART;TZID=America/New_York:20261023T090000
+DTEND;TZID=Asia/Tokyo:20261024T130000
+END:VEVENT
+BEGIN:VEVENT
+UID:series
+DTSTAMP:20261020T080000Z
+DTSTART;TZID=Africa/Casablanca:20240105T090000
+RRULE:FREQ=WEEKLY
+EXDATE;TZID=Africa/Casablanca:20261023T090000
+END:VEVENT
+END:VCALENDAR
+`)
+	var first string
+	for i := 0; i < 50; i++ {
+		cal, err := Parse(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		Localize(cal, paris)
+		if out := Encode(cal); i == 0 {
+			first = out
+		} else if out != first {
+			t.Fatalf("run %d gave another text:\n%s\nfirst:\n%s", i, out, first)
+		}
+	}
+}

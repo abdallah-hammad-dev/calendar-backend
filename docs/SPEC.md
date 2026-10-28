@@ -194,6 +194,8 @@ The provider then notifies the organizer from the invited address, and the next 
   for secrets; Davis on SQLite in a volume; backups of Davis's and the backend's databases.
 - Davis settings as in `davis/davis.env.example` (`INVITE_FROM_ADDRESS` empty). The Davis user's email is the
   address the backend writes as my `ATTENDEE`.
+- **No Davis log file** (`LOG_FILE_PATH=/dev/null`): on every error it writes the whole request, the Basic password
+  included (`bench/TESTS.md`, 2026-10-28). Its database keeps only an MD5-based hash, so long random passwords.
 - The iPhone account then points to `https://cal.<domain>/dav/` instead of the Tailscale bench.
 
 ## 9. Part 2: organizing meetings

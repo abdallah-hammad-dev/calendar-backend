@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 var (
@@ -29,7 +30,8 @@ type Client struct {
 	http     *http.Client
 }
 
-// New makes a client for the server at base (e.g. http://127.0.0.1:9000/dav/). hc nil = http.DefaultClient.
+// New makes a client for the server at base (e.g. http://127.0.0.1:9000/dav/). hc nil = a client that gives up
+// after two minutes: without a limit, a server that never answers stops every pass, silently.
 func New(base, user, password string, hc *http.Client) (*Client, error) {
 	u, err := url.Parse(base)
 	if err != nil || u.Scheme == "" || u.Host == "" {
@@ -39,7 +41,7 @@ func New(base, user, password string, hc *http.Client) (*Client, error) {
 		u.Path += "/"
 	}
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = &http.Client{Timeout: 2 * time.Minute}
 	}
 	return &Client{base: u, user: user, password: password, http: hc}, nil
 }
