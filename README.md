@@ -11,18 +11,19 @@ Côté serveur du plugin Obsidian calendar-tasks : le serveur CalDAV, son banc d
   `TESTS.md`.
 - `start.sh` : relance Davis et Radicale après un redémarrage.
 
-- Le backend Go (`cmd/`, `internal/`) : copie les comptes externes dans Davis, chacun dans la collection que je
-  choisis (« École », « Général »…, à côté de mes propres événements et tâches), et lit mes réponses aux
-  invitations. Pour l'instant (B1) une seule sorte de compte, un flux ICS publié
-  (lecture seule) ; Google, Microsoft et le relais des réponses viennent ensuite.
+- Le backend Go (`cmd/`, `internal/`) : copie les comptes externes dans Davis (Google, Microsoft personnel ou de
+  l'école, calendrier publié en ICS), chacun dans la collection que je choisis (« École », « Général »…, à côté de
+  mes propres événements et tâches), et renvoie mes réponses aux invitations depuis l'adresse invitée. La page des
+  comptes (connexion avec l'utilisateur Davis) ajoute, reconnecte ou retire un compte.
 
 ```bash
-cp backend.env.example backend.env     # utilisateur Davis, mot de passe, nom du coffre Obsidian
-go run ./cmd/calendar-backend add-feed -name École -address moi@ecole.fr -url https://…/calendar.ics -collection École
-go run ./cmd/calendar-backend once     # une passe ; « run » tourne en continu
+cp backend.env.example backend.env     # utilisateur Davis, mot de passe, coffre Obsidian, Google / Microsoft
+go run ./cmd/calendar-backend run      # page des comptes sur http://localhost:8080 + synchro en continu
+go run ./cmd/calendar-backend once     # une passe
 go run ./cmd/calendar-backend accounts # comptes, dernière synchro, dernière erreur
 go test ./...                          # + DAVIS_TEST_URL=http://127.0.0.1:9000/dav/ pour les tests contre Davis
 ```
 
-Pas encore fait : les comptes Google / Microsoft, le relais des réponses, la page des comptes, le déploiement sur
-VPS (HTTPS, nom de domaine). Tout est décrit dans `docs/SPEC.md` ; notes pour Claude dans `CLAUDE.md`.
+Brancher Google et Microsoft (une fois par serveur) : `docs/comptes.md`. Pas encore fait : le déploiement sur VPS
+(HTTPS, nom de domaine, synchro du coffre Obsidian). Tout est décrit dans `docs/SPEC.md` ; notes pour Claude dans
+`CLAUDE.md`.

@@ -1,4 +1,5 @@
-// Command calendar-backend mirrors external accounts into Davis and watches the mirrors for my answers.
+// Command calendar-backend mirrors external accounts into Davis, relays my answers to their invitations, and serves
+// the accounts page.
 package main
 
 import (
@@ -8,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,18 +21,20 @@ import (
 	// without their VTIMEZONE.
 	_ "time/tzdata"
 
-	"github.com/abdallah-hammad-dev/calendar-backend/internal/adapter"
-	"github.com/abdallah-hammad-dev/calendar-backend/internal/adapter/icsfeed"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/accounts"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/config"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/davis"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/mirror"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/oauth"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/store"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/web"
 )
 
 const usage = `usage: calendar-backend [-env FILE] COMMAND
 
 Commands:
-  run         pass every DAVIS_INTERVAL (accounts every SOURCE_INTERVAL) until stopped
+  run         the accounts page on LISTEN, and a pass every DAVIS_INTERVAL (accounts every SOURCE_INTERVAL),
+              until stopped
   once        one pass, accounts included
   accounts    list the accounts and how their last pass went
   add-feed    add an ICS feed account (read-only): -name, -address, -url, -collection (one of mine, by name or href)
@@ -85,14 +89,51 @@ func run(ctx context.Context, envFile, cmd string, args []string) error {
 	if p.Email() == "" {
 		return fmt.Errorf("Davis user %q has no email: set one in the Davis dashboard (it is the address invitations are shown for)", cfg.DavisUser)
 	}
+	kinds := &accounts.Kinds{Store: st}
+	callback := cfg.BaseURL + web.CallbackPath
+	if cfg.GoogleClientID != "" {
+		kinds.Google = oauth.Google(cfg.GoogleClientID, cfg.GoogleClientSecret, callback)
+	}
+	if cfg.MicrosoftClientID != "" {
+		kinds.Microsoft = oauth.Microsoft(cfg.MicrosoftClientID, cfg.MicrosoftClientSecret, cfg.MicrosoftTenant, callback)
+	}
 	e := &mirror.Engine{Store: st, Davis: dc, Me: p.Email(), Home: p.Home, Vault: cfg.Vault, Loc: cfg.Location,
-		Adapter: adapterFor, Log: log}
+		Adapter: kinds.Adapter, Log: log}
 
 	switch cmd {
 	case "run":
 		log.Info("running", "davis", cfg.DavisURL, "user", cfg.DavisUser, "me", e.Me,
-			"davis_every", cfg.DavisEvery, "source_every", cfg.SourceEvery)
-		return e.Run(ctx, cfg.DavisEvery, cfg.SourceEvery)
+			"davis_every", cfg.DavisEvery, "source_every", cfg.SourceEvery, "page", cfg.BaseURL,
+			"google", kinds.Google != nil, "microsoft", kinds.Microsoft != nil)
+		if cfg.Listen == "" {
+			return e.Run(ctx, cfg.DavisEvery, cfg.SourceEvery)
+		}
+		page := &web.Server{Engine: e, Store: st, Kinds: kinds, BaseURL: cfg.BaseURL, User: cfg.DavisUser,
+			Password: cfg.DavisPassword, Log: log}
+		h, err := page.Handler(ctx)
+		if err != nil {
+			return err
+		}
+		srv := &http.Server{Addr: cfg.Listen, Handler: h, ReadHeaderTimeout: 10 * time.Second}
+		served := make(chan error, 1)
+		go func() { served <- srv.ListenAndServe() }()
+		go func() {
+			<-ctx.Done()
+			shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			srv.Shutdown(shut)
+		}()
+		ran := make(chan error, 1)
+		go func() { ran <- e.Run(ctx, cfg.DavisEvery, cfg.SourceEvery) }()
+		select {
+		case err := <-served:
+			if !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("accounts page on %s: %w", cfg.Listen, err)
+			}
+			return <-ran
+		case err := <-ran:
+			return err
+		}
 	case "once":
 		return e.Pass(ctx, true)
 	case "add-feed":
@@ -105,7 +146,7 @@ func run(ctx context.Context, envFile, cmd string, args []string) error {
 		if *name == "" || *address == "" || *url == "" || *collection == "" {
 			return errors.New("add-feed: -name, -address, -url and -collection are required")
 		}
-		conf, _ := json.Marshal(feedConfig{URL: *url})
+		conf, _ := json.Marshal(accounts.FeedConfig{URL: *url})
 		a, err := e.AddAccount(ctx, store.Account{Kind: "ics", Name: *name, Address: *address, Config: string(conf)}, *collection)
 		if err != nil {
 			return err
@@ -136,22 +177,6 @@ func run(ctx context.Context, envFile, cmd string, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown command %q (see -h)", cmd)
-}
-
-type feedConfig struct {
-	URL string `json:"url"`
-}
-
-func adapterFor(a store.Account) (adapter.Adapter, error) {
-	switch a.Kind {
-	case "ics":
-		var c feedConfig
-		if err := json.Unmarshal([]byte(a.Config), &c); err != nil {
-			return nil, fmt.Errorf("account %d: bad config: %w", a.ID, err)
-		}
-		return &icsfeed.Feed{URL: c.URL}, nil
-	}
-	return nil, fmt.Errorf("account %d: unknown kind %q", a.ID, a.Kind)
 }
 
 func listAccounts(ctx context.Context, st *store.Store) error {

@@ -1,0 +1,487 @@
+// Package web is the accounts page (spec §7): sign in with the Davis user, add a Google, Microsoft or ICS feed
+// account and the collection its events go into, see how each account's last pass went, sign one in again, remove
+// one. It is one person's page (one backend per person): one login, the Davis user's.
+package web
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"embed"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"html/template"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/oauth2"
+
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/accounts"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/davis"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/ics"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/mirror"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/oauth"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/store"
+)
+
+//go:embed templates/*.html
+var templates embed.FS
+
+var pages = template.Must(template.New("").Funcs(template.FuncMap{"kind": kindLabel}).ParseFS(templates, "templates/*.html"))
+
+// CallbackPath is where providers send the browser back after sign-in: BASE_URL + CallbackPath is the redirect URI
+// set up at Google and Microsoft.
+const CallbackPath = "/oauth/callback"
+
+const (
+	sessionCookie = "session"
+	sessionLife   = 30 * 24 * time.Hour
+	signInLife    = 15 * time.Minute
+)
+
+type Server struct {
+	Engine   *mirror.Engine
+	Store    *store.Store
+	Kinds    *accounts.Kinds
+	BaseURL  string // the page's public address, no trailing slash
+	User     string // the Davis user and password: the page's login
+	Password string
+	Log      *slog.Logger
+
+	key     []byte
+	loginMu sync.Mutex // failed logins wait one at a time
+
+	mu      sync.Mutex
+	signIns map[string]signIn // by OAuth state
+}
+
+// signIn is a sign-in under way at a provider.
+type signIn struct {
+	Kind       string
+	Name       string
+	Collection string // href
+	AccountID  int64  // signing an existing account in again
+	Verifier   string
+	Started    time.Time
+}
+
+// Handler is the page, with its session key (made once, kept in the database).
+func (s *Server) Handler(ctx context.Context) (http.Handler, error) {
+	key, err := s.Store.Setting(ctx, "session_key")
+	if err != nil {
+		return nil, err
+	}
+	if key == "" {
+		b := make([]byte, 32)
+		rand.Read(b)
+		key = hex.EncodeToString(b)
+		if err := s.Store.SetSetting(ctx, "session_key", key); err != nil {
+			return nil, err
+		}
+	}
+	s.key, _ = hex.DecodeString(key)
+	s.signIns = map[string]signIn{}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
+	mux.HandleFunc("GET /login", s.loginPage)
+	mux.HandleFunc("POST /login", s.login)
+	mux.HandleFunc("POST /logout", s.logout)
+	mux.Handle("GET /{$}", s.auth(s.home))
+	mux.Handle("POST /accounts/ics", s.auth(s.addFeed))
+	mux.Handle("POST /accounts/{kind}/connect", s.auth(s.connect))
+	mux.Handle("GET "+CallbackPath, s.auth(s.callback))
+	mux.Handle("POST /accounts/{id}/remove", s.auth(s.remove))
+	mux.Handle("POST /sync", s.auth(func(w http.ResponseWriter, r *http.Request) {
+		s.Engine.Wake()
+		http.Redirect(w, r, "/?ok=sync", http.StatusSeeOther)
+	}))
+	return headers(http.NewCrossOriginProtection().Handler(mux)), nil
+}
+
+// headers: never framed, cached, nor sending the address (an OAuth code) to another site.
+func headers(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https:; frame-ancestors 'none'")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// --- session
+
+func (s *Server) sign(expires int64) string {
+	m := hmac.New(sha256.New, s.key)
+	fmt.Fprint(m, expires)
+	return strconv.FormatInt(expires, 10) + "." + base64.RawURLEncoding.EncodeToString(m.Sum(nil))
+}
+
+func (s *Server) loggedIn(r *http.Request) bool {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return false
+	}
+	exp, _, ok := strings.Cut(c.Value, ".")
+	n, err := strconv.ParseInt(exp, 10, 64)
+	return ok && err == nil && time.Now().Unix() < n && hmac.Equal([]byte(s.sign(n)), []byte(c.Value))
+}
+
+func (s *Server) auth(h http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.loggedIn(r) {
+			if r.Method == http.MethodGet && r.URL.Path == "/" {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+			s.render(w, http.StatusUnauthorized, "error", page{Error: "Ta session a expiré : reconnecte-toi.", Back: "/login"})
+			return
+		}
+		h(w, r)
+	})
+}
+
+func (s *Server) cookie(value string, maxAge int) *http.Cookie {
+	return &http.Cookie{Name: sessionCookie, Value: value, Path: "/", MaxAge: maxAge, HttpOnly: true,
+		Secure: strings.HasPrefix(s.BaseURL, "https://"), SameSite: http.SameSiteLaxMode}
+}
+
+func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
+	if s.loggedIn(r) {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	s.render(w, http.StatusOK, "login", page{})
+}
+
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	user, pass := r.PostFormValue("user"), r.PostFormValue("password")
+	okUser := subtle.ConstantTimeCompare([]byte(user), []byte(s.User)) == 1
+	okPass := subtle.ConstantTimeCompare([]byte(pass), []byte(s.Password)) == 1
+	if !okUser || !okPass {
+		// Slow, and one at a time: guessing the password takes a second per try.
+		s.loginMu.Lock()
+		time.Sleep(time.Second)
+		s.loginMu.Unlock()
+		s.Log.Warn("failed login on the accounts page", "from", r.RemoteAddr)
+		s.render(w, http.StatusUnauthorized, "login", page{Error: "Identifiant ou mot de passe incorrect."})
+		return
+	}
+	exp := time.Now().Add(sessionLife).Unix()
+	http.SetCookie(w, s.cookie(s.sign(exp), int(sessionLife.Seconds())))
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, s.cookie("", -1))
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// --- the page
+
+type page struct {
+	Error, Notice string
+	Back          string // the error page's link back
+	Me            string // my address on Davis
+	Accounts      []row
+	Collections   []davis.Calendar
+	Google        bool
+	Microsoft     bool
+	CallbackURL   string
+}
+
+type row struct {
+	store.Account
+	CollectionName string
+	LastSyncText   string
+	SignIn         bool // signed into at a provider: can be signed in again
+	SignInOver     bool
+}
+
+var notices = map[string]string{
+	"added":       "Compte ajouté : ses événements arrivent dans la collection choisie (la première fois peut prendre quelques minutes).",
+	"reconnected": "Compte reconnecté.",
+	"removed":     "Compte retiré.",
+	"sync":        "Synchronisation lancée.",
+}
+
+func (s *Server) home(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	p := page{Notice: notices[r.URL.Query().Get("ok")], Me: s.Engine.Me, Google: s.Kinds.Google != nil,
+		Microsoft: s.Kinds.Microsoft != nil, CallbackURL: s.BaseURL + CallbackPath}
+	cols, err := s.collections(ctx)
+	if err != nil {
+		p.Error = "Davis ne répond pas : " + err.Error()
+	}
+	p.Collections = cols
+	names := map[string]string{}
+	for _, c := range cols {
+		names[c.Href] = c.DisplayName
+	}
+	list, err := s.Store.Accounts(ctx)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	for _, a := range list {
+		rw := row{Account: a, CollectionName: names[a.Collection], SignIn: s.Kinds.Provider(a.Kind) != nil,
+			SignInOver: strings.Contains(a.LastError, accounts.ErrSignIn.Error())}
+		if rw.CollectionName == "" {
+			rw.CollectionName = a.Collection
+		}
+		if a.LastSync.IsZero() {
+			rw.LastSyncText = "jamais"
+		} else {
+			rw.LastSyncText = a.LastSync.In(s.Engine.Loc).Format("02/01/2006 15:04")
+		}
+		p.Accounts = append(p.Accounts, rw)
+	}
+	s.render(w, http.StatusOK, "home", p)
+}
+
+// collections are mine that hold events, by name.
+func (s *Server) collections(ctx context.Context) ([]davis.Calendar, error) {
+	all, err := s.Engine.Davis.Calendars(ctx, s.Engine.Home)
+	if err != nil {
+		return nil, err
+	}
+	var out []davis.Calendar
+	for _, c := range all {
+		for _, comp := range c.Components {
+			if comp == "VEVENT" {
+				out = append(out, c)
+				break
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].DisplayName) < strings.ToLower(out[j].DisplayName) })
+	return out, nil
+}
+
+// --- adding accounts
+
+func (s *Server) addFeed(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.PostFormValue("name"))
+	address := strings.TrimSpace(r.PostFormValue("address"))
+	link := strings.TrimSpace(r.PostFormValue("url"))
+	u, err := url.Parse(link)
+	switch {
+	case name == "" || address == "" || link == "":
+		s.problem(w, "Donne un nom, ton adresse sur ce compte et le lien du calendrier.")
+		return
+	case err != nil || (u.Scheme != "https" && u.Scheme != "http" && u.Scheme != "webcal") || u.Host == "":
+		s.problem(w, "Le lien doit commencer par https://, http:// ou webcal://.")
+		return
+	case !strings.Contains(address, "@"):
+		s.problem(w, "L'adresse doit être une adresse mail.")
+		return
+	}
+	if s.duplicate(r.Context(), "ics", address, w) {
+		return
+	}
+	conf := fmt.Sprintf(`{"url":%q}`, link)
+	if _, err := s.Engine.AddAccount(r.Context(), store.Account{Kind: "ics", Name: name, Address: address, Config: conf},
+		r.PostFormValue("collection")); err != nil {
+		s.problem(w, "Impossible d'ajouter le compte : "+err.Error())
+		return
+	}
+	s.Engine.Wake()
+	http.Redirect(w, r, "/?ok=added", http.StatusSeeOther)
+}
+
+// duplicate refuses a second account for the same address of the same kind (its events would be copied twice).
+func (s *Server) duplicate(ctx context.Context, kind, address string, w http.ResponseWriter) bool {
+	list, err := s.Store.Accounts(ctx)
+	if err != nil {
+		s.fail(w, err)
+		return true
+	}
+	for _, a := range list {
+		if a.Kind == kind && ics.Address(a.Address) == ics.Address(address) {
+			s.problem(w, "Ce compte est déjà ajouté ("+a.Name+").")
+			return true
+		}
+	}
+	return false
+}
+
+// connect sends the browser to the provider's sign-in, for a new account or one to sign in again.
+func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
+	kind := r.PathValue("kind")
+	p := s.Kinds.Provider(kind)
+	if p == nil {
+		s.problem(w, "La connexion "+kindLabel(kind)+" n'est pas configurée sur ce serveur.")
+		return
+	}
+	in := signIn{Kind: kind, Verifier: oauth2.GenerateVerifier(), Started: time.Now()}
+	if id := r.PostFormValue("account"); id != "" {
+		n, _ := strconv.ParseInt(id, 10, 64)
+		a, err := s.Store.Account(r.Context(), n)
+		if err != nil || a.Kind != kind {
+			s.problem(w, "Ce compte n'existe plus.")
+			return
+		}
+		in.AccountID = a.ID
+	} else {
+		in.Name = strings.TrimSpace(r.PostFormValue("name"))
+		if in.Name == "" {
+			in.Name = kindLabel(kind)
+		}
+		c, err := s.Engine.Collection(r.Context(), r.PostFormValue("collection"))
+		if err != nil {
+			s.problem(w, "Choisis une collection : "+err.Error())
+			return
+		}
+		in.Collection = c.Href
+	}
+	state := oauth2.GenerateVerifier() // 32 random bytes, as good a state as any
+	s.mu.Lock()
+	for k, v := range s.signIns {
+		if time.Since(v.Started) > signInLife {
+			delete(s.signIns, k)
+		}
+	}
+	s.signIns[state] = in
+	s.mu.Unlock()
+	http.Redirect(w, r, p.AuthURL(state, in.Verifier), http.StatusSeeOther)
+}
+
+func (s *Server) takeSignIn(state string) (signIn, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	in, ok := s.signIns[state]
+	delete(s.signIns, state)
+	return in, ok && time.Since(in.Started) <= signInLife
+}
+
+// callback is where the provider sends the browser back: the account is added, or signed in again.
+func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	q := r.URL.Query()
+	in, ok := s.takeSignIn(q.Get("state"))
+	if !ok {
+		s.problem(w, "Ce lien de connexion a expiré ou a déjà servi : recommence depuis la page des comptes.")
+		return
+	}
+	if e := q.Get("error"); e != "" {
+		msg := q.Get("error_description")
+		if msg == "" {
+			msg = e
+		}
+		s.problem(w, kindLabel(in.Kind)+" a refusé la connexion : "+msg)
+		return
+	}
+	p := s.Kinds.Provider(in.Kind)
+	tok, err := p.Exchange(ctx, q.Get("code"), in.Verifier)
+	if err != nil {
+		s.Log.Warn("sign-in failed", "kind", in.Kind, "err", err)
+		s.problem(w, "La connexion n'a pas abouti : "+err.Error())
+		return
+	}
+	address, err := s.Kinds.Address(ctx, in.Kind, tok)
+	if err != nil {
+		s.problem(w, "Impossible de connaître l'adresse de ce compte : "+err.Error())
+		return
+	}
+	config := oauth.Stored{Token: tok}.Encode()
+
+	if in.AccountID != 0 {
+		a, err := s.Store.Account(ctx, in.AccountID)
+		if err != nil {
+			s.problem(w, "Ce compte n'existe plus.")
+			return
+		}
+		if ics.Address(a.Address) != ics.Address(address) {
+			s.problem(w, "Tu t'es connecté avec "+address+", mais ce compte est celui de "+a.Address+".")
+			return
+		}
+		if err := s.Store.SetAccountConfig(ctx, a.ID, config); err != nil {
+			s.fail(w, err)
+			return
+		}
+		if err := s.Store.RetryFailedAnswers(ctx, a.ID); err != nil {
+			s.fail(w, err)
+			return
+		}
+		s.Log.Info("account signed in again", "account", a.ID)
+		s.Engine.Wake()
+		http.Redirect(w, r, "/?ok=reconnected", http.StatusSeeOther)
+		return
+	}
+	if s.duplicate(ctx, in.Kind, address, w) {
+		return
+	}
+	if _, err := s.Engine.AddAccount(ctx, store.Account{Kind: in.Kind, Name: in.Name, Address: address, Config: config},
+		in.Collection); err != nil {
+		s.problem(w, "Impossible d'ajouter le compte : "+err.Error())
+		return
+	}
+	s.Engine.Wake()
+	http.Redirect(w, r, "/?ok=added", http.StatusSeeOther)
+}
+
+func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	a, err := s.Store.Account(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		s.problem(w, "Ce compte n'existe plus.")
+		return
+	} else if err != nil {
+		s.fail(w, err)
+		return
+	}
+	events := r.PostFormValue("events")
+	if events != "delete" && events != "keep" {
+		s.problem(w, "Dis ce que deviennent ses événements : supprimés de Davis, ou gardés tels quels.")
+		return
+	}
+	if err := s.Engine.RemoveAccount(r.Context(), a, events == "delete"); err != nil {
+		s.problem(w, "Impossible de retirer le compte : "+err.Error())
+		return
+	}
+	http.Redirect(w, r, "/?ok=removed", http.StatusSeeOther)
+}
+
+// --- rendering
+
+func (s *Server) render(w http.ResponseWriter, status int, name string, p page) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if err := pages.ExecuteTemplate(w, name, p); err != nil {
+		s.Log.Error("page", "template", name, "err", err)
+	}
+}
+
+// problem is something I can fix: said on its own page, with a way back.
+func (s *Server) problem(w http.ResponseWriter, msg string) {
+	s.render(w, http.StatusBadRequest, "error", page{Error: msg, Back: "/"})
+}
+
+func (s *Server) fail(w http.ResponseWriter, err error) {
+	s.Log.Error("accounts page", "err", err)
+	s.render(w, http.StatusInternalServerError, "error", page{Error: "Erreur du serveur : " + err.Error(), Back: "/"})
+}
+
+func kindLabel(kind string) string {
+	switch kind {
+	case "google":
+		return "Google"
+	case "microsoft":
+		return "Microsoft"
+	case "ics":
+		return "Flux ICS"
+	}
+	return kind
+}

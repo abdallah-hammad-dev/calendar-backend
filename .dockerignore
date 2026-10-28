@@ -1,0 +1,6 @@
+# Only the Go sources go into the image: never the bench's data or any secret.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/

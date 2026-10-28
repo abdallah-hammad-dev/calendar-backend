@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/emersion/go-ical"
@@ -17,7 +18,8 @@ import (
 )
 
 // Engine runs the passes: each account's source into the collection I chose for it, and those collections back
-// (my answers). Passes run one after another, never concurrently.
+// (my answers, relayed to the providers). Passes run one after another, never concurrently, nor while an account
+// is removed.
 //
 // A collection is mine: it also holds my own events and tasks, maybe other accounts' events. The engine only
 // touches the items it wrote (the store knows their hrefs) and leaves everything else alone.
@@ -34,8 +36,22 @@ type Engine struct {
 	Log     *slog.Logger
 	Now     func() time.Time // nil = time.Now
 
+	mu        sync.Mutex
 	emptySeen map[int64]bool // accounts whose last full listing was empty while we held events
+	wakeOnce  sync.Once
+	wake      chan struct{}
 }
+
+// RSVP states written on an event (spec §6, extension spec §4.6).
+const (
+	StatePending   = "pending"   // not taken by the provider yet: tried again at each pass
+	StateConfirmed = "confirmed" // the provider took it, and tells the organizer
+	StateFailed    = "failed:"   // + why: it won't go through; tried again when I answer again
+)
+
+// sourceWins: once the provider took my answer, a source still showing another one this long after is a change
+// made there since (in Gmail, in Outlook), and wins.
+const sourceWins = 10 * time.Minute
 
 func (e *Engine) now() time.Time {
 	if e.Now != nil {
@@ -82,6 +98,8 @@ func (e *Engine) Collection(ctx context.Context, nameOrHref string) (davis.Calen
 
 // AddAccount records an account that writes into one of my collections (by name or href). The backend makes no
 // collection: a collection only for this account is one I made for it.
+//
+// It doesn't wait for a pass under way (a first listing can be long): the next pass takes the account.
 func (e *Engine) AddAccount(ctx context.Context, a store.Account, collection string) (store.Account, error) {
 	c, err := e.Collection(ctx, collection)
 	if err != nil {
@@ -98,6 +116,8 @@ func (e *Engine) AddAccount(ctx context.Context, a store.Account, collection str
 // RemoveAccount forgets the account. Its events are deleted from Davis when asked to; otherwise they stay as they
 // are (still marked as mirrored, so read-only in the extension, and no longer updated).
 func (e *Engine) RemoveAccount(ctx context.Context, a store.Account, deleteEvents bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if deleteEvents {
 		items, err := e.Store.Items(ctx, a.ID)
 		if err != nil {
@@ -116,8 +136,10 @@ func (e *Engine) RemoveAccount(ctx context.Context, a store.Account, deleteEvent
 }
 
 // Pass reads each collection that accounts write into (answers made since the last pass must be seen before a
-// source can overwrite them), then, when withSource, each account's source.
+// source can overwrite them), relays the answers seen, then, when withSource, reads each account's source.
 func (e *Engine) Pass(ctx context.Context, withSource bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	accounts, err := e.Store.Accounts(ctx)
 	if err != nil {
 		return err
@@ -138,8 +160,8 @@ func (e *Engine) Pass(ctx context.Context, withSource bool) error {
 		}
 		for _, a := range byCollection[coll] {
 			err := werr
-			if err == nil && withSource {
-				err = e.Pull(ctx, a)
+			if err == nil {
+				err = e.account(ctx, a, withSource)
 			}
 			if err != nil {
 				e.Log.Warn("pass failed", "account", a.ID, "err", err)
@@ -153,31 +175,58 @@ func (e *Engine) Pass(ctx context.Context, withSource bool) error {
 	return errors.Join(errs...)
 }
 
-// Run passes every davisEvery, with the sources every sourceEvery, until ctx ends.
-func (e *Engine) Run(ctx context.Context, davisEvery, sourceEvery time.Duration) error {
-	var lastSource time.Time
-	t := time.NewTicker(davisEvery)
-	defer t.Stop()
-	for {
-		withSource := e.now().Sub(lastSource) >= sourceEvery
-		if withSource {
-			lastSource = e.now()
-		}
-		e.Pass(ctx, withSource) // failures are logged and kept per account; the next pass tries again
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-t.C:
-		}
-	}
-}
-
-// Pull copies what changed on the account into its collection.
-func (e *Engine) Pull(ctx context.Context, a store.Account) error {
+// account relays the account's answers and, when withSource, reads its source: one adapter for both (a token
+// refreshed once). An answer that couldn't be sent doesn't hold the source back.
+func (e *Engine) account(ctx context.Context, a store.Account, withSource bool) error {
 	ad, err := e.Adapter(a)
 	if err != nil {
 		return err
 	}
+	rerr := e.Relay(ctx, a, ad)
+	if !withSource {
+		return rerr
+	}
+	return errors.Join(rerr, e.Pull(ctx, a, ad))
+}
+
+// Run passes every davisEvery, with the sources every sourceEvery, until ctx ends. Wake starts a whole pass at
+// once.
+func (e *Engine) Run(ctx context.Context, davisEvery, sourceEvery time.Duration) error {
+	var lastSource time.Time
+	t := time.NewTicker(davisEvery)
+	defer t.Stop()
+	withSource := true
+	for {
+		if withSource || e.now().Sub(lastSource) >= sourceEvery {
+			withSource, lastSource = true, e.now()
+		}
+		e.Pass(ctx, withSource) // failures are logged and kept per account; the next pass tries again
+		withSource = false
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+		case <-e.wakeChan():
+			withSource = true
+		}
+	}
+}
+
+// Wake asks Run for a whole pass now (an account was added, or "sync now" on the accounts page).
+func (e *Engine) Wake() {
+	select {
+	case e.wakeChan() <- struct{}{}:
+	default: // one is already asked for
+	}
+}
+
+func (e *Engine) wakeChan() chan struct{} {
+	e.wakeOnce.Do(func() { e.wake = make(chan struct{}, 1) })
+	return e.wake
+}
+
+// Pull copies what changed on the account into its collection.
+func (e *Engine) Pull(ctx context.Context, a store.Account, ad adapter.Adapter) error {
 	page, err := ad.List(ctx, a.SourceToken)
 	if err != nil {
 		return err
@@ -185,6 +234,16 @@ func (e *Engine) Pull(ctx context.Context, a store.Account) error {
 	var errs []error
 	seen := map[string]bool{}
 	for _, ch := range page.Changes {
+		if ch.UID == "" && ch.Deleted { // deleted, said by the provider's id alone
+			it, err := e.Store.ItemBySourceID(ctx, a.ID, ch.SourceID)
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			} else if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			ch.UID = it.UID
+		}
 		seen[ch.UID] = true
 		if ch.Deleted {
 			err = e.remove(ctx, a, ch.UID)
@@ -235,9 +294,15 @@ func (e *Engine) upsert(ctx context.Context, a store.Account, ch adapter.Change)
 	it.SourceID = ch.SourceID
 	it.Invited = ch.Me
 	it.SourceData = ics.Encode(ch.Calendar)
-	if it.Answer != "" && ics.MyPartstat(ch.Calendar, e.invited(a, it)) == it.Answer {
-		e.Log.Info("answer confirmed by the source", "account", a.ID, "uid", it.UID, "partstat", it.Answer)
-		it.Answer = ""
+	if it.Answer != "" {
+		switch src := ics.MyPartstat(ch.Calendar, e.invited(a, it)); {
+		case src == it.Answer:
+			e.Log.Info("answer confirmed by the source", "account", a.ID, "uid", it.UID, "partstat", it.Answer)
+			it.Answer, it.Sent = "", ""
+		case it.RSVPState == StateConfirmed && e.now().Sub(it.SentAt) > sourceWins:
+			e.Log.Info("answer changed on the source since it was sent", "account", a.ID, "uid", it.UID, "partstat", src)
+			it.Answer, it.Sent = "", ""
+		}
 	}
 	if it.Href == "" {
 		// Invited on two addresses whose accounts write into the same collection: one copy (Davis takes two items
@@ -391,13 +456,14 @@ func (e *Engine) write(ctx context.Context, a store.Account, it *store.Item, cur
 	}
 }
 
-// base is the copy built from the source alone, and its hash.
+// base is the copy built from the source and what the backend knows of my answer, and its hash.
 func (e *Engine) base(a store.Account, it *store.Item) (*ical.Calendar, string, error) {
 	src, err := ics.Parse(it.SourceData)
 	if err != nil {
 		return nil, "", err
 	}
 	base := Base(src, e.invited(a, *it), it.Answer, e.target(a))
+	SetRSVPState(base, e.Me, it.RSVPState)
 	return base, Hash(ics.Encode(base)), nil
 }
 
@@ -425,8 +491,49 @@ func (e *Engine) observe(a store.Account, it *store.Item, got davis.Item) {
 	p := ics.MyPartstat(cal, e.Me)
 	if p != "" && p != it.Partstat && p != it.Answer {
 		e.Log.Info("answer made on Davis", "account", a.ID, "uid", it.UID, "partstat", p)
-		it.Answer = p
+		it.Answer, it.Sent, it.SentAt, it.RSVPState = p, "", time.Time{}, "" // the state said how the last one went
 	}
+}
+
+// Relay sends the account's answers made on Davis that it hasn't sent yet, and writes where each stands on its
+// event (spec §6). An answer the provider refuses for good isn't tried again until I answer again; any other
+// failure is tried again at the next pass, the event saying "pending".
+func (e *Engine) Relay(ctx context.Context, a store.Account, ad adapter.Adapter) error {
+	items, err := e.Store.Items(ctx, a.ID)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, it := range items {
+		if it.Answer == "" || it.Href == "" {
+			continue
+		}
+		if it.Sent != it.Answer {
+			var refused *adapter.Refused
+			switch err := ad.RSVP(ctx, it.SourceID, it.Answer); {
+			case err == nil:
+				e.Log.Info("answer sent", "account", a.ID, "uid", it.UID, "partstat", it.Answer)
+				it.Sent, it.SentAt, it.RSVPState = it.Answer, e.now(), StateConfirmed
+			case errors.As(err, &refused):
+				e.Log.Warn("answer refused", "account", a.ID, "uid", it.UID, "err", err)
+				it.Sent, it.SentAt, it.RSVPState = it.Answer, time.Time{}, StateFailed+refused.Reason
+			default:
+				e.Log.Warn("answer not sent yet", "account", a.ID, "uid", it.UID, "err", err)
+				it.RSVPState = StatePending
+				errs = append(errs, fmt.Errorf("%s: answer not sent yet: %w", it.UID, err))
+			}
+			if err := e.Store.PutItem(ctx, it); err != nil { // before writing: a failed write mustn't send it twice
+				return err
+			}
+		}
+		// The state on the event: written now, or at a later pass if Davis couldn't take it.
+		if _, hash, err := e.base(a, &it); err != nil || hash != it.BaseHash {
+			if err := e.write(ctx, a, &it, nil); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", it.UID, err))
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (e *Engine) remove(ctx context.Context, a store.Account, uid string) error {

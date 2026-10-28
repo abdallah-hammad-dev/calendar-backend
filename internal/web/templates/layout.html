@@ -1,0 +1,59 @@
+{{define "head"}}<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Comptes · calendrier</title>
+<style>
+:root {
+  --bg: #f6f6f4; --card: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc;
+  --accent: #2f5d8a; --accent-text: #ffffff; --ok-bg: #e7f3ea; --ok: #1f6b34; --err-bg: #fbeaea; --err: #9b2c2c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --card: #20201f; --text: #ecebe6; --muted: #a09f98; --line: #34342f;
+    --accent: #6f9fd0; --accent-text: #0e1620; --ok-bg: #1b2e20; --ok: #8fd19e; --err-bg: #3a1e1e; --err: #f0a3a3;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+h1 { font-size: 22px; margin: 0; }
+h2 { font-size: 16px; margin: 0 0 12px; }
+.muted { color: var(--muted); font-size: 13px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.notice, .error { border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; }
+.notice { background: var(--ok-bg); color: var(--ok); }
+.error { background: var(--err-bg); color: var(--err); }
+.account { border-top: 1px solid var(--line); padding: 12px 0; }
+.account:first-of-type { border-top: 0; padding-top: 0; }
+.account .name { font-weight: 600; }
+.account .err { color: var(--err); font-size: 13px; overflow-wrap: anywhere; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+input[type=text], input[type=email], input[type=password], input[type=url], select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit;
+}
+button { font: inherit; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button.danger { color: var(--err); }
+form.inline { display: inline; }
+details summary { cursor: pointer; color: var(--accent); font-size: 14px; }
+details[open] summary { margin-bottom: 6px; }
+.choice { display: flex; gap: 6px; align-items: center; color: var(--text); font-size: 14px; margin: 4px 0; }
+.adds { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.adds .card { margin-bottom: 0; }
+code { font-size: 13px; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+{{end}}
+
+{{define "foot"}}
+</main>
+</body>
+</html>
+{{end}}

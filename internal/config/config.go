@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -20,6 +21,15 @@ type Config struct {
 	Location      *time.Location // TIMEZONE (IANA): where times given in UTC are written
 	DavisEvery    time.Duration  // DAVIS_INTERVAL: how often the mirror collections are read (answers)
 	SourceEvery   time.Duration  // SOURCE_INTERVAL: how often the accounts are read
+
+	Listen  string // LISTEN: the accounts page's address ("" = no page)
+	BaseURL string // BASE_URL: the page's public address; BASE_URL/oauth/callback is the redirect URI
+
+	GoogleClientID        string // GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET: the Google Cloud project's OAuth client
+	GoogleClientSecret    string //   ("" = no Google accounts)
+	MicrosoftClientID     string // MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET: the Entra app registration
+	MicrosoftClientSecret string //   ("" = no Microsoft accounts)
+	MicrosoftTenant       string // MICROSOFT_TENANT: "common" (personal and any organization's accounts)
 }
 
 // Load reads envFile if it exists ("" = none), then the environment.
@@ -47,10 +57,27 @@ func Load(envFile string) (Config, error) {
 		DavisPassword: get("DAVIS_PASSWORD", ""),
 		DBPath:        get("DB_PATH", "data/backend.db"),
 		Vault:         get("VAULT", ""),
+
+		Listen:                get("LISTEN", "127.0.0.1:8080"),
+		BaseURL:               strings.TrimRight(get("BASE_URL", "http://localhost:8080"), "/"),
+		GoogleClientID:        get("GOOGLE_CLIENT_ID", ""),
+		GoogleClientSecret:    get("GOOGLE_CLIENT_SECRET", ""),
+		MicrosoftClientID:     get("MICROSOFT_CLIENT_ID", ""),
+		MicrosoftClientSecret: get("MICROSOFT_CLIENT_SECRET", ""),
+		MicrosoftTenant:       get("MICROSOFT_TENANT", "common"),
 	}
 	var errs []error
 	if c.DavisUser == "" || c.DavisPassword == "" {
 		errs = append(errs, errors.New("DAVIS_USER and DAVIS_PASSWORD are required"))
+	}
+	if u, err := url.Parse(c.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Path != "" {
+		errs = append(errs, fmt.Errorf("BASE_URL %q: want the page's address, like https://comptes.example.fr", c.BaseURL))
+	}
+	for _, pair := range [][3]string{{"GOOGLE", c.GoogleClientID, c.GoogleClientSecret},
+		{"MICROSOFT", c.MicrosoftClientID, c.MicrosoftClientSecret}} {
+		if (pair[1] == "") != (pair[2] == "") {
+			errs = append(errs, fmt.Errorf("%s_CLIENT_ID and %s_CLIENT_SECRET go together", pair[0], pair[0]))
+		}
 	}
 	tz := get("TIMEZONE", "Europe/Paris")
 	loc, err := time.LoadLocation(tz)

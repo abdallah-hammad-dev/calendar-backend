@@ -185,3 +185,19 @@ sur l'iPhone), dans une collection jetable supprimée à la fin.
 | **Deux éléments avec le même `UID` dans une collection** (deux `PUT`, adresses différentes) | ⚠️ **Davis accepte les deux** (201, 201) : aucune vérification d'unicité. Le backend l'évite lui-même |
 | Deux comptes dans la même collection, invités à la même réunion sur deux adresses | ✅ une seule copie ; quand le premier compte la perd, celle du second prend le relais |
 | Suppression d'un compte avec ses événements | ✅ seuls les siens sont supprimés |
+
+## Backend B2–B5 contre Davis (2026-10-23)
+
+Même façon de faire (`orga`, collections jetables). Google et Microsoft ne sont pas encore essayés sur de vrais
+comptes : leurs adaptateurs sont testés sur des réponses construites d'après la doc des API (spec §11, ce qu'il
+faudra vérifier en premier).
+
+| Test | Résultat |
+|---|---|
+| Relais : j'accepte « sur l'iPhone » | ✅ envoyé une fois, `X-CALTASKS-RSVP-STATE:confirmed` sur l'événement ; rien de renvoyé ni de réécrit à la passe suivante |
+| Le fournisseur ne répond pas, puis refuse | ✅ `pending` et réessayé à chaque passe, puis `failed:<raison>` et plus réessayé ; ma réponse reste sur Davis |
+| Je réponds autre chose ensuite | ✅ l'état est effacé, la nouvelle réponse part |
+| La réponse est changée chez le fournisseur après l'envoi | ✅ la source l'emporte 10 minutes après l'envoi, pas avant ; rien n'est renvoyé |
+| Flux ICS (lecture seule) : réponse depuis Davis | ✅ `failed:ce compte est en lecture seule, l'organisateur n'est pas prévenu` (la virgule arrive échappée `\,`, normal en TEXT) |
+| Page des comptes : connexion avec l'utilisateur Davis, ajout d'un compte (faux Google), reconnexion, retrait | ✅ ; une reconnexion avec une autre adresse est refusée, un `state` ne sert qu'une fois |
+| Binaire `run` : page + synchro, ajout d'un flux ICS par la page | ✅ une passe part tout de suite, l'invitation est dans Davis en moins d'une seconde ; réponse vue en moins de 2 s (`DAVIS_INTERVAL=2s`) |

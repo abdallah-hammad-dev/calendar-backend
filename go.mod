@@ -4,6 +4,8 @@ go 1.27.0
 
 require (
 	github.com/emersion/go-ical v0.0.0-20250609112844-439c63cef608
+	golang.org/x/net v0.61.0
+	golang.org/x/oauth2 v0.37.0
 	modernc.org/sqlite v1.61.0
 )
 

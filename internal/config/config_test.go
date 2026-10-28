@@ -24,6 +24,30 @@ func TestLoad(t *testing.T) {
 	if c.DavisURL != "http://127.0.0.1:9000/dav/" || c.DBPath != "data/backend.db" {
 		t.Fatalf("%+v", c)
 	}
+	if c.Listen != "127.0.0.1:8080" || c.BaseURL != "http://localhost:8080" || c.MicrosoftTenant != "common" {
+		t.Fatalf("%+v", c)
+	}
+}
+
+func TestLoadAccountsPage(t *testing.T) {
+	t.Setenv("DAVIS_USER", "abd")
+	t.Setenv("DAVIS_PASSWORD", "x")
+	t.Setenv("BASE_URL", "https://comptes.example.fr/")
+	t.Setenv("GOOGLE_CLIENT_ID", "id")
+	t.Setenv("GOOGLE_CLIENT_SECRET", "secret")
+	c, err := Load("")
+	if err != nil || c.BaseURL != "https://comptes.example.fr" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	t.Setenv("GOOGLE_CLIENT_SECRET", "")
+	if _, err := Load(""); err == nil {
+		t.Fatal("a client id without its secret")
+	}
+	t.Setenv("GOOGLE_CLIENT_SECRET", "secret")
+	t.Setenv("BASE_URL", "comptes.example.fr")
+	if _, err := Load(""); err == nil {
+		t.Fatal("a BASE_URL without its scheme")
+	}
 }
 
 func TestLoadErrors(t *testing.T) {

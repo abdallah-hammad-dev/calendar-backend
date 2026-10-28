@@ -251,3 +251,27 @@ END:VCALENDAR
 		}
 	}
 }
+
+func TestProps(t *testing.T) {
+	paris := Zone("Europe/Paris")
+	at := time.Date(2026, 10, 23, 7, 0, 0, 0, time.UTC)
+	if p := DateTime("DTSTART", at, paris); p.Value != "20261023T090000" || p.Params.Get("TZID") != "Europe/Paris" {
+		t.Fatalf("%+v", p)
+	}
+	if p := DateTime("DTSTART", at, nil); p.Value != "20261023T070000Z" || len(p.Params) != 0 {
+		t.Fatalf("%+v", p)
+	}
+	if p, err := Date("DTSTART", "2026-10-24T00:00:00.0000000"); err != nil || p.Value != "20261024" || p.Params.Get("VALUE") != "DATE" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	if _, err := Date("DTSTART", "oct 24"); err == nil {
+		t.Fatal("bad date accepted")
+	}
+	p, err := Line("EXDATE;TZID=Europe/Paris:20261103T090000,20261110T090000")
+	if err != nil || p.Name != "EXDATE" || p.Params.Get("TZID") != "Europe/Paris" || p.Value != "20261103T090000,20261110T090000" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	if Zone("UTC") != nil || Zone("Nowhere/City") != nil || Zone("") != nil {
+		t.Fatal("UTC, unknown or empty zone loaded")
+	}
+}

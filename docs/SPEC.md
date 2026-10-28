@@ -81,6 +81,25 @@ notification) and in Obsidian, and my answer leaves from the address that was in
 - **ICS feed** (B1, `internal/adapter/icsfeed`): a published `https://` / `webcal://` link (or a `file://` for
   tests), read whole at each pass (its hash is the "sync token"), read-only: answers stay on Davis, not sent. It is
   the plan B above, and what B1 runs with.
+- **Google** (B2, 2026-10-23, `internal/adapter/google`): the account's main calendar, `events.list` with
+  `showDeleted` (a cancelled occurrence is how Google says it was taken out of its series) and recurring events not
+  expanded; `410` on a sync token → a full listing. A series comes whole: when any of its events changed, it is
+  listed again by `iCalUID` (master and changed occurrences share it), cancelled occurrences becoming `EXDATE`s.
+  An occurrence I'm invited to without its series is written alone. Working-location entries ("Bureau",
+  "Domicile") are not mirrored. My address: the ID token's verified email; an alias I'm invited on is the
+  attendee marked `self`. Answer: a patch of my attendee only (`attendeesOmitted`), `sendUpdates=all`.
+- **Microsoft** (B5, 2026-10-23, `internal/adapter/microsoft`): Graph v1.0 tracks changes only over a date range
+  (`calendarView/delta`) and gives each occurrence apart with an id (and `iCalUId`) of its own. The range: a
+  year back from the first listing (kept), a year and a half ahead, renewed by a full round when less than a year
+  is left. Any change to an occurrence has the series read again from its master
+  (`$select=…,exceptionOccurrences,cancelledOccurrences&$expand=exceptionOccurrences`): `RRULE` from Outlook's
+  pattern, exceptions as overrides (`RECURRENCE-ID` from `originalStart`), cancelled occurrences
+  (`OID.<id>.<day>`) as `EXDATE`s at the series' time of day. A deletion comes as an id alone, so the token (JSON)
+  also maps each Graph id to its event's UID. Times asked in UTC (`Prefer: outlook.timezone`), written in the
+  event's zone: Outlook's Windows names mapped to IANA with CLDR's `windowsZones.xml`. My answer is the event's
+  `responseStatus` (I'm added as an attendee when invited through a group). My address: the mailbox's
+  (`/me/calendar` owner), not the sign-in name. Answer: `accept` / `tentativelyAccept` / `decline`, with
+  `sendResponse` only when the organizer asked for answers.
 - **Open: the third, generic kind.** CalDAV (above, the recap's choice) covers accounts that have a calendar. The
   alternative is IMAP + SMTP (read invitation emails, answer by mail from that address): it covers *any* address,
   even without a calendar, but means parsing emails, and changes and cancellations arrive as emails too. To decide
@@ -125,8 +144,11 @@ Every field the extension or the iPhone reads must be copied, or it's missing on
 - the **meeting link** as `CONFERENCE;VALUE=URI;FEATURE=VIDEO:` (Google: `conferenceData.entryPoints` of type video,
   else `hangoutLink`, Zoom add-on included; Microsoft: `onlineMeeting.joinUrl`). Phone entries may go in
   `CONFERENCE;FEATURE=PHONE` (the extension ignores `tel:`). The APIs keep the link apart from the description, so
-  copying the description alone can miss it (extension spec §4.5, §7.1). Open: whether Apple Calendar's own "Join"
-  reads `CONFERENCE` or only links in the place / notes (§11);
+  copying the description alone can miss it (extension spec §4.5, §7.1). For the iPhone, whose Calendar may not
+  read `CONFERENCE` (§11), the link also goes in `LOCATION` when the source has none (the iPhone's "Location or
+  Video Call" field: one field for both), else in `DESCRIPTION` when it isn't there ("Google Meet: <link>"): a room
+  is never replaced (2026-10-23, `adapter.Meeting`). The extension shows no place that is only the link, and one
+  "Join" whatever the link's place. If the iPhone test shows `CONFERENCE` is enough, these copies go;
 - `URL:obsidian://calendar-tasks?vault=<vault>&uid=<UID>`, the link back to the note (extension spec §4.5); the
   vault name is a backend setting;
 - `X-CALTASKS-SOURCE-ACCOUNT` (which account; it's what makes an event a mirror for the extension),
@@ -141,7 +163,9 @@ Rules the mirror applies on top (B1, `internal/mirror/build.go`):
   left alone: making me an attendee would show Accept / Decline on my own event, and a Davis-address `ORGANIZER`
   would make Davis send invitations itself (part 2).
 - **What a client adds is kept** across rewrites: `VALARM`s (once a copy exists, its alarms are the client's),
-  `X-APPLE-*` / `X-MOZ-*` properties, and `X-CALTASKS-RSVP-STATE`. Everything else is the source's (the source wins).
+  `X-APPLE-*` / `X-MOZ-*` properties. Everything else is the source's (the source wins). `X-CALTASKS-RSVP-STATE`
+  is the relay's own record (`items.rsvp_state`), written on each component I'm invited in; a new answer clears it
+  (B3).
 - A source's own `URL` goes into `DESCRIPTION` (the extension still finds a meeting link there); `URL` is the
   `obsidian://` link. `METHOD` is dropped (a CalDAV object can't have one), `PRODID` is the backend's.
 - Times in UTC become `TZID=<TIMEZONE>` wall-clock times, **except on a recurring master** (UTC there means the same
@@ -165,19 +189,29 @@ the iPhone follows its own "show declined events" setting.
    compares my `PARTSTAT` with the last one it knows, and calls the adapter's `RSVP`.
 3. It writes `X-CALTASKS-RSVP-STATE`: `pending`, then `confirmed`, or `failed:<reason>`. The extension shows it under
    the buttons ("Sent to the organizer.", or why it failed) and removes it when I answer again.
+   As built (B3, 2026-10-23, `Engine.Relay`, each Davis pass): `confirmed` as soon as the provider's API takes the
+   answer (one write in the usual case); `pending` only while it can't be reached (tried again at each pass);
+   `failed:<reason>` when it refuses for good (`adapter.Refused`: event gone, account read-only, sign-in over…),
+   not tried again until I answer again, or the account is signed in again. Reasons are in French, shown as is.
 4. A small "answers in flight" table keeps a provider sync from putting `NEEDS-ACTION` back before the provider
    confirms. (B1: `items.answer`, set when my `PARTSTAT` on Davis differs from the one the backend wrote, used
-   instead of the source's until the source shows the same answer. The relay call itself is B3.)
+   instead of the source's until the source shows the same answer.) Once the provider took it, a source still
+   showing another answer more than 10 minutes later is a change made there since (in Gmail, Outlook): the source
+   wins (B3).
 
 The provider then notifies the organizer from the invited address, and the next sync brings the state back.
 
 ## 7. Accounts page
 
 - "Add account" → Google / Microsoft / Other → sign in (OAuth) or URL + app password → a name and the collection
-  its events go into (one of mine). The extension's "Accounts page URL" setting opens this page (its "Add account"
-  button).
+  its events go into (one of mine). I open the page myself: the extension has no link to it (2026-10-24, the user:
+  a link made the extension depend on the backend, and accounts are added rarely).
 - Lists each account with its state (last sync, last error); remove an account (and its events, after asking).
-- Not public: behind Cloudflare Access or reachable through Tailscale only.
+- **Login with the Davis user** (2026-10-23, B4, `internal/web`), instead of Cloudflare Access or Tailscale: one
+  backend per person, so one login, the one on the iPhone. Signed session cookie (30 days, key made once and kept
+  in the database), a second's wait per failed login, `CrossOriginProtection` against other sites' posts, no
+  framing, no caching, no referrer. OAuth with PKCE and a state good once for 15 minutes. "Sync now" starts a whole
+  pass; adding an account starts one too. Signing an account in again must give the same address.
 - One-time setup per provider, done by me: a Google Cloud project (Calendar API on, OAuth consent "External",
   published), an Entra app registration (personal + any organization accounts). The page shows the redirect URI to
   paste. `http://localhost` redirect URIs work for local development.
@@ -197,6 +231,20 @@ The provider then notifies the organizer from the invited address, and the next 
 - **No Davis log file** (`LOG_FILE_PATH=/dev/null`): on every error it writes the whole request, the Basic password
   included (`bench/TESTS.md`, 2026-10-28). Its database keeps only an MD5-based hash, so long random passwords.
 - The iPhone account then points to `https://cal.<domain>/dav/` instead of the Tailscale bench.
+- **Decided 2026-10-23, for the deployment step:**
+  - Everything needed for the calendar *and* the Obsidian vault's sync lives in this repo (the user: "tout ce qu'il
+    faut pour avoir le calendrier, le sync obsidian"): the vault syncs with the **Self-hosted LiveSync** plugin
+    (it runs inside the normal Obsidian app, iPhone included; end-to-end encrypted) through **CouchDB** in the same
+    compose, at `sync.<domain>`. Syncthing was set aside (no real iPhone client).
+  - Docker on the VPS (its service starts the containers again at boot: `restart: unless-stopped`); only the
+    reverse proxy (Caddy) publishes ports, 80 and 443 (Docker's ports go around ufw).
+  - `deploy.sh` asks for what's missing in `.env` (domain, Let's Encrypt email, my user and password; it makes
+    the other secrets), checks it all before touching the VPS (values, SSH and sudo, DNS pointing at the VPS and
+    not at Cloudflare's proxy), then after (real certificates, a Davis login, no compression on `/dav/`, CouchDB's
+    settings for LiveSync). Run again safely.
+  - CI/CD (the user, to test and fix quickly): a push on `main` runs the tests, builds the backend's image, and the
+    VPS takes it; GitHub's key can only start that update, not open a shell. BRAT does the same for the extension.
+  - `cal.` and `sync.` "DNS only" at Cloudflare: its proxy may weaken ETags when compressing (the 412s of the bench).
 
 ## 9. Part 2: organizing meetings
 
@@ -272,10 +320,16 @@ organize, the `X-CALTASKS-SEND-STATE` line, "Copy link" on the card.
 - **B1 — Go skeleton.** Config, SQLite, Davis CalDAV client (write mirror events, sync-collection), runs locally
   against the bench Davis. *Done 2026-10-22*, with the ICS feed adapter as its first source (§4).
 - **B2 — Google, read.** OAuth (localhost first), mirror with the §5.2 checklist, tests on recorded API answers.
-  *Needs me: the Google Cloud project.*
-- **B3 — RSVP relay** for Google, `X-CALTASKS-RSVP-STATE`, answers in flight.
-- **B4 — Accounts page.**
+  *Needs me: the Google Cloud project.* *Coded 2026-10-23*, tested on answers shaped from the API reference; to
+  test on my account.
+- **B3 — RSVP relay** for Google, `X-CALTASKS-RSVP-STATE`, answers in flight. *Coded 2026-10-23* (every kind),
+  tested against the bench Davis.
+- **B4 — Accounts page.** *Coded 2026-10-23*, tested against the bench Davis with a fake provider.
 - **B5 — Microsoft** (personal, then school: consent test first). *Needs me: the Entra app, the school sign-in.*
+  *Coded 2026-10-23* with B2; to test on my accounts.
+- **Order changed 2026-10-23** (the user: test directly on a real domain rather than localhost and Tailscale):
+  B2–B5 coded first, then B0 and B7 together (Davis, the backend, then the vault sync, on the VPS), then tests on
+  my accounts and fixes.
 - **B6 — The generic adapter** (§4, once decided).
 - **B7 — Backend in production** on the VPS.
 - Then part 2 (§9).
@@ -284,14 +338,25 @@ organize, the `X-CALTASKS-SEND-STATE` line, "Copy link" on the card.
 
 - My actual addresses (Gmail? Outlook personal? school Microsoft? others?): sets the order and the generic adapter.
 - Generic adapter: CalDAV or IMAP + SMTP (§4).
-- Does Apple Calendar show its "Join" button for a `CONFERENCE`-only event? (bench: one event with `CONFERENCE`
-  only, one with the link in the notes.)
+- Does Apple Calendar show its "Join" button for a `CONFERENCE`-only event? (on the VPS: one event with
+  `CONFERENCE` only, one with the link in the notes, one with it in the place; and whether two of them make two
+  "Join".)
 - Deleting a mirrored invitation on the iPhone: decline it, or bring it back at the next sync? (B1, provisional:
   forgotten on Davis, brought back only when the source changes the event.)
 - `SCHEDULE-AGENT=CLIENT` on the `ORGANIZER` of mirror events would stop Davis's own scheduling on them (the
   `SCHEDULE-STATUS=3.7` attempts, and a REPLY *delivered* if the organizer happens to be a user of the same Davis).
   Bench test needed: does the iPhone still show Accept / Maybe / Decline then?
-- One backend for several Davis users (the friend), or one per person?
+- ~~One backend for several Davis users, or one per person?~~ One per person, each on their own VPS (2026-10-23,
+  the user: "mes amis ils auront leurs propres VPS, c'est un utilisateur par VPS").
+- To check at the first test on real accounts (read in the API references, not tried): Google lists a series'
+  master and changed occurrences by `iCalUID`; Graph's delta gives single events whole (the docs say so); a
+  cancelled occurrence's day (`OID.<id>.<day>`) is the series' local day; an all-day event asked in UTC comes at
+  midnight; `sendResponse: false` when the organizer asked for no answer; Graph lists series masters in a delta
+  round or only their occurrences (both handled).
+- Does Gmail / Outlook keep a meeting an emailed invitation *declares* (RFC 7986 `CONFERENCE`, or
+  `X-GOOGLE-CONFERENCE` / `X-MICROSOFT-SKYPETEAMSMEETINGURL`) from a tool it doesn't know? The backend reads the
+  event the provider made of the email, never the email (§2): if the provider drops the declaration, only the link
+  the tool also wrote in the text (or the place) is left. Test: send myself such an invitation, read both APIs.
 - Polling intervals, and later provider push (Google watch channels, Graph subscriptions need a public HTTPS
   endpoint).
 - `X-` property names, fixed together with the extension (extension spec §4.7): all prefixed `X-CALTASKS-` (decided

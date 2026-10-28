@@ -1,0 +1,19 @@
+{{define "login"}}{{template "head"}}
+<header><h1>Comptes</h1></header>
+{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+<form class="card" method="post" action="/login">
+  <h2>Connexion</h2>
+  <p class="muted">Avec ton utilisateur Davis, celui du calendrier sur l'iPhone.</p>
+  <label for="user">Utilisateur</label>
+  <input id="user" type="text" name="user" autocomplete="username" autocapitalize="none" required autofocus>
+  <label for="password">Mot de passe</label>
+  <input id="password" type="password" name="password" autocomplete="current-password" required>
+  <div class="row"><button type="submit" class="primary">Se connecter</button></div>
+</form>
+{{template "foot"}}{{end}}
+
+{{define "error"}}{{template "head"}}
+<header><h1>Comptes</h1></header>
+<div class="error">{{.Error}}</div>
+{{if .Back}}<p><a href="{{.Back}}">Retour</a></p>{{end}}
+{{template "foot"}}{{end}}

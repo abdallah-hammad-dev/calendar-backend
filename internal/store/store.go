@@ -12,11 +12,15 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-//go:embed schema.sql
-var schemaV1 string
+var (
+	//go:embed schema.sql
+	schemaV1 string
+	//go:embed schema2.sql
+	schemaV2 string
+)
 
 // migrations[i] takes the database from version i to i+1 (PRAGMA user_version).
-var migrations = []string{schemaV1}
+var migrations = []string{schemaV1, schemaV2}
 
 var ErrNotFound = errors.New("store: not found")
 
@@ -130,6 +134,12 @@ func (s *Store) DeleteAccount(ctx context.Context, id int64) error {
 	return err
 }
 
+// SetAccountConfig replaces the account's kind-specific JSON (an OAuth token refreshed, or signed in again).
+func (s *Store) SetAccountConfig(ctx context.Context, id int64, config string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE accounts SET config = ? WHERE id = ?`, config, id)
+	return err
+}
+
 func (s *Store) SetSourceToken(ctx context.Context, id int64, token string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE accounts SET source_token = ? WHERE id = ?`, token, id)
 	return err
@@ -173,21 +183,34 @@ type Item struct {
 	BaseHash   string
 	Partstat   string
 	Answer     string
+	Sent       string    // the answer the relay sent, or failed to send for good ("" = none yet)
+	SentAt     time.Time // when the provider took Sent (zero when it failed)
+	RSVPState  string    // the X-CALTASKS-RSVP-STATE last written on the Davis copy
 }
 
-const itemCols = `account_id, uid, source_id, invited, source_data, href, etag, base_hash, partstat, answer`
+const itemCols = `account_id, uid, source_id, invited, source_data, href, etag, base_hash, partstat, answer, sent,
+	sent_at, rsvp_state`
 
 func scanItem(row interface{ Scan(...any) error }) (Item, error) {
 	var it Item
-	err := row.Scan(&it.AccountID, &it.UID, &it.SourceID, &it.Invited, &it.SourceData, &it.Href, &it.ETag, &it.BaseHash, &it.Partstat, &it.Answer)
+	var sentAt string
+	err := row.Scan(&it.AccountID, &it.UID, &it.SourceID, &it.Invited, &it.SourceData, &it.Href, &it.ETag, &it.BaseHash,
+		&it.Partstat, &it.Answer, &it.Sent, &sentAt, &it.RSVPState)
 	if errors.Is(err, sql.ErrNoRows) {
 		return it, ErrNotFound
 	}
+	it.SentAt, _ = time.Parse(time.RFC3339, sentAt)
 	return it, err
 }
 
 func (s *Store) Item(ctx context.Context, accountID int64, uid string) (Item, error) {
 	return scanItem(s.db.QueryRowContext(ctx, `SELECT `+itemCols+` FROM items WHERE account_id = ? AND uid = ?`, accountID, uid))
+}
+
+// ItemBySourceID finds an account's item by the provider's id for it (a deletion the provider reports by id only).
+func (s *Store) ItemBySourceID(ctx context.Context, accountID int64, sourceID string) (Item, error) {
+	return scanItem(s.db.QueryRowContext(ctx, `SELECT `+itemCols+` FROM items WHERE account_id = ? AND source_id = ?`,
+		accountID, sourceID))
 }
 
 // ItemByHref finds the mirrored event stored at a Davis href (as the backend wrote it), whichever its account.
@@ -231,16 +254,45 @@ func (s *Store) Items(ctx context.Context, accountID int64) ([]Item, error) {
 }
 
 func (s *Store) PutItem(ctx context.Context, it Item) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO items (`+itemCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	sentAt := ""
+	if !it.SentAt.IsZero() {
+		sentAt = it.SentAt.UTC().Format(time.RFC3339)
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO items (`+itemCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (account_id, uid) DO UPDATE SET source_id = excluded.source_id, invited = excluded.invited,
 		source_data = excluded.source_data,
 		href = excluded.href, etag = excluded.etag, base_hash = excluded.base_hash, partstat = excluded.partstat,
-		answer = excluded.answer`,
-		it.AccountID, it.UID, it.SourceID, it.Invited, it.SourceData, it.Href, it.ETag, it.BaseHash, it.Partstat, it.Answer)
+		answer = excluded.answer, sent = excluded.sent, sent_at = excluded.sent_at, rsvp_state = excluded.rsvp_state`,
+		it.AccountID, it.UID, it.SourceID, it.Invited, it.SourceData, it.Href, it.ETag, it.BaseHash, it.Partstat, it.Answer,
+		it.Sent, sentAt, it.RSVPState)
+	return err
+}
+
+// RetryFailedAnswers makes the relay try again the answers of an account it gave up on (the account was signed into
+// again).
+func (s *Store) RetryFailedAnswers(ctx context.Context, accountID int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE items SET sent = '' WHERE account_id = ? AND rsvp_state LIKE 'failed:%'`,
+		accountID)
 	return err
 }
 
 func (s *Store) DeleteItem(ctx context.Context, accountID int64, uid string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM items WHERE account_id = ? AND uid = ?`, accountID, uid)
+	return err
+}
+
+// Setting is a value the backend made for itself ("" when not set yet).
+func (s *Store) Setting(ctx context.Context, key string) (string, error) {
+	var v string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return v, err
+}
+
+func (s *Store) SetSetting(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO settings (key, value) VALUES (?, ?)
+		ON CONFLICT (key) DO UPDATE SET value = excluded.value`, key, value)
 	return err
 }

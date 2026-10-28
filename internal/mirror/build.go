@@ -104,8 +104,9 @@ func noteLink(vault, uid string) string {
 var keptPrefixes = []string{"X-APPLE-", "X-MOZ-"}
 
 // Merge carries into base what a client added to the Davis copy existing and the source knows nothing of: alarms
-// (once a copy exists, its VALARMs are the client's), X-APPLE-* / X-MOZ-* properties, and the relay's
-// X-CALTASKS-RSVP-STATE. Components are paired by RECURRENCE-ID. base is modified and returned.
+// (once a copy exists, its VALARMs are the client's) and X-APPLE-* / X-MOZ-* properties. Components are paired by
+// RECURRENCE-ID. base is modified and returned. X-CALTASKS-RSVP-STATE isn't carried: the relay's own record of it
+// is written (SetRSVPState), and a client's new answer clears it.
 func Merge(base, existing *ical.Calendar) *ical.Calendar {
 	if existing == nil {
 		return base
@@ -120,7 +121,7 @@ func Merge(base, existing *ical.Calendar) *ical.Calendar {
 			continue
 		}
 		for name, props := range prev.Props {
-			if name == PropRSVPState || hasPrefix(name, keptPrefixes) {
+			if hasPrefix(name, keptPrefixes) {
 				if _, own := ev.Props[name]; !own {
 					ev.Props[name] = props
 				}
@@ -140,6 +141,17 @@ func Merge(base, existing *ical.Calendar) *ical.Calendar {
 		ev.Children = children
 	}
 	return base
+}
+
+// SetRSVPState writes where my answer stands (spec §6: pending, confirmed, failed:<reason>; "" = nothing to say)
+// on each component I'm invited in: the extension reads it on the occurrence it shows.
+func SetRSVPState(cal *ical.Calendar, me, state string) {
+	for _, ev := range ics.Events(cal) {
+		ev.Props.Del(PropRSVPState)
+		if state != "" && ics.Attendee(ev, me) != nil {
+			ics.SetText(ev, PropRSVPState, state)
+		}
+	}
 }
 
 func hasPrefix(name string, prefixes []string) bool {

@@ -168,11 +168,34 @@ func TestMerge(t *testing.T) {
 	if len(m.Children) != 1 || m.Children[0].Name != ical.CompAlarm {
 		t.Fatal("alarm lost")
 	}
-	if ics.Value(m, "X-APPLE-TRAVEL-ADVISORY-BEHAVIOR") != "AUTOMATIC" || ics.Value(m, PropRSVPState) != "confirmed" {
-		t.Fatal("client or relay property lost")
+	if ics.Value(m, "X-APPLE-TRAVEL-ADVISORY-BEHAVIOR") != "AUTOMATIC" {
+		t.Fatal("client property lost")
+	}
+	if m.Props.Get(PropRSVPState) != nil {
+		t.Fatal("the relay's state carried from the copy: it is the store's to write")
 	}
 	if len(ics.Events(merged)[1].Children) != 0 {
 		t.Fatal("alarm given to the wrong occurrence")
+	}
+}
+
+func TestSetRSVPState(t *testing.T) {
+	cal := Base(parse(t, source), "me@gmail.com", "", target)
+	SetRSVPState(cal, target.Me, "failed:gone")
+	for _, ev := range ics.Events(cal) {
+		if v, _ := ev.Props.Text(PropRSVPState); v != "failed:gone" {
+			t.Fatalf("%s: %q", ics.RecurrenceID(ev), v)
+		}
+	}
+	SetRSVPState(cal, target.Me, "")
+	if strings.Contains(ics.Encode(cal), PropRSVPState) {
+		t.Fatal("state not removed")
+	}
+	// Not on an event I'm not invited to.
+	own := Base(parse(t, strings.ReplaceAll(source, "ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:me@gmail.com\n", "")), "me@gmail.com", "", target)
+	SetRSVPState(own, target.Me, "confirmed")
+	if strings.Contains(ics.Encode(own), PropRSVPState) {
+		t.Fatal("state on an event I'm not invited to")
 	}
 }
 

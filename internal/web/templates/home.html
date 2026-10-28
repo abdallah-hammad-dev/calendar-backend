@@ -1,0 +1,97 @@
+{{define "home"}}{{template "head"}}
+<header>
+  <h1>Comptes</h1>
+  <div class="row">
+    <form class="inline" method="post" action="/sync"><button type="submit">Synchroniser maintenant</button></form>
+    <form class="inline" method="post" action="/logout"><button type="submit">Se déconnecter</button></form>
+  </div>
+</header>
+{{if .Notice}}<div class="notice">{{.Notice}}</div>{{end}}
+{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+
+<section class="card">
+  <h2>Mes comptes</h2>
+  {{range .Accounts}}
+  <div class="account">
+    <div class="name">{{.Name}} <span class="muted">· {{kind .Kind}} · {{.Address}}</span></div>
+    <div class="muted">Dans « {{.CollectionName}} » · dernière synchro : {{.LastSyncText}}</div>
+    {{if .LastError}}<div class="err">{{if .SignInOver}}La connexion à ce compte a expiré : reconnecte-le.{{else}}{{.LastError}}{{end}}</div>{{end}}
+    <div class="row">
+      {{if .SignIn}}
+      <form class="inline" method="post" action="/accounts/{{.Kind}}/connect">
+        <input type="hidden" name="account" value="{{.ID}}">
+        <button type="submit"{{if .SignInOver}} class="primary"{{end}}>Reconnecter</button>
+      </form>
+      {{end}}
+      <details>
+        <summary>Retirer</summary>
+        <form method="post" action="/accounts/{{.ID}}/remove">
+          <label class="choice"><input type="radio" name="events" value="delete" required> Supprimer ses événements de Davis</label>
+          <label class="choice"><input type="radio" name="events" value="keep"> Les garder tels quels (plus mis à jour)</label>
+          <button type="submit" class="danger">Retirer {{.Name}}</button>
+        </form>
+      </details>
+    </div>
+  </div>
+  {{else}}
+  <p class="muted">Aucun compte pour l'instant. Ajoute-en un ci-dessous : ses événements et ses invitations arriveront dans
+  la collection choisie, et tes réponses partiront de son adresse.</p>
+  {{end}}
+</section>
+
+{{if .Collections}}
+<section class="adds">
+  {{if .Google}}
+  <form class="card" method="post" action="/accounts/google/connect">
+    <h2>Ajouter un compte Google</h2>
+    <label for="g-name">Nom</label>
+    <input id="g-name" type="text" name="name" placeholder="Gmail">
+    <label for="g-collection">Collection où vont ses événements</label>
+    <select id="g-collection" name="collection" required>{{range $.Collections}}
+      <option value="{{.Href}}">{{.DisplayName}}</option>{{end}}
+    </select>
+    <div class="row"><button type="submit" class="primary">Se connecter à Google</button></div>
+  </form>
+  {{end}}
+  {{if .Microsoft}}
+  <form class="card" method="post" action="/accounts/microsoft/connect">
+    <h2>Ajouter un compte Microsoft</h2>
+    <label for="m-name">Nom</label>
+    <input id="m-name" type="text" name="name" placeholder="École">
+    <label for="m-collection">Collection où vont ses événements</label>
+    <select id="m-collection" name="collection" required>{{range $.Collections}}
+      <option value="{{.Href}}">{{.DisplayName}}</option>{{end}}
+    </select>
+    <div class="row"><button type="submit" class="primary">Se connecter à Microsoft</button></div>
+    <p class="muted">Personnel (Outlook.com) ou d'une organisation (école, travail).</p>
+  </form>
+  {{end}}
+  <form class="card" method="post" action="/accounts/ics">
+    <h2>Ajouter un calendrier publié (ICS)</h2>
+    <label for="i-name">Nom</label>
+    <input id="i-name" type="text" name="name" required placeholder="Emploi du temps">
+    <label for="i-address">Mon adresse sur ce compte</label>
+    <input id="i-address" type="email" name="address" required placeholder="moi@ecole.fr">
+    <label for="i-url">Lien du calendrier</label>
+    <input id="i-url" type="url" name="url" required placeholder="https://…/calendar.ics">
+    <label for="i-collection">Collection où vont ses événements</label>
+    <select id="i-collection" name="collection" required>{{range $.Collections}}
+      <option value="{{.Href}}">{{.DisplayName}}</option>{{end}}
+    </select>
+    <div class="row"><button type="submit" class="primary">Ajouter</button></div>
+    <p class="muted">Lecture seule : tes réponses restent sur Davis, l'organisateur n'est pas prévenu.</p>
+  </form>
+</section>
+{{else if not .Error}}
+<div class="card"><p>Aucune de tes collections Davis ne contient d'événements : crée-en une (sur l'iPhone ou dans
+Obsidian), puis reviens ici.</p></div>
+{{end}}
+
+<section class="card">
+  <h2>Réglages</h2>
+  <p class="muted">Tes invitations sont écrites pour <strong>{{.Me}}</strong>, l'adresse de ton utilisateur Davis.</p>
+  <p class="muted">Adresse de retour à donner à Google et à Microsoft (« URI de redirection ») :<br><code>{{.CallbackURL}}</code></p>
+  {{if not .Google}}<p class="muted">Google n'est pas configuré (GOOGLE_CLIENT_ID et GOOGLE_CLIENT_SECRET).</p>{{end}}
+  {{if not .Microsoft}}<p class="muted">Microsoft n'est pas configuré (MICROSOFT_CLIENT_ID et MICROSOFT_CLIENT_SECRET).</p>{{end}}
+</section>
+{{template "foot"}}{{end}}
