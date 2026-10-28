@@ -24,6 +24,9 @@ go run ./cmd/calendar-backend accounts # comptes, dernière synchro, dernière e
 go test ./...                          # + DAVIS_TEST_URL=http://127.0.0.1:9000/dav/ pour les tests contre Davis
 ```
 
-Brancher Google et Microsoft (une fois par serveur) : `docs/comptes.md`. Pas encore fait : le déploiement sur VPS
-(HTTPS, nom de domaine, synchro du coffre Obsidian). Tout est décrit dans `docs/SPEC.md` ; notes pour Claude dans
-`CLAUDE.md`.
+Brancher Google et Microsoft (une fois par serveur) : `docs/comptes.md`.
+
+Sur le VPS : `./deploy.sh` installe ou met à jour Caddy (HTTPS), Davis, CouchDB (synchro du coffre Obsidian) et le
+backend, depuis `deploy/` ; il demande ce qui manque dans `deploy/.env` et vérifie tout avant et après. Ensuite,
+chaque push sur `main` déploie le backend (tests, image, mise à jour sur le VPS). Tout est décrit dans
+`docs/SPEC.md` ; notes pour Claude dans `CLAUDE.md`.

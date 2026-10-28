@@ -201,3 +201,20 @@ faudra vérifier en premier).
 | Flux ICS (lecture seule) : réponse depuis Davis | ✅ `failed:ce compte est en lecture seule, l'organisateur n'est pas prévenu` (la virgule arrive échappée `\,`, normal en TEXT) |
 | Page des comptes : connexion avec l'utilisateur Davis, ajout d'un compte (faux Google), reconnexion, retrait | ✅ ; une reconnexion avec une autre adresse est refusée, un `state` ne sert qu'une fois |
 | Binaire `run` : page + synchro, ajout d'un flux ICS par la page | ✅ une passe part tout de suite, l'invitation est dans Davis en moins d'une seconde ; réponse vue en moins de 2 s (`DAVIS_INTERVAL=2s`) |
+
+## Pile de déploiement en local (2026-10-28)
+
+`deploy/compose.yaml` tel quel (Caddy avec ses propres certificats, ports locaux), Davis 5.5.0, CouchDB 3.5.3, le
+backend construit par le `Dockerfile`.
+
+| Test | Résultat |
+|---|---|
+| `cal.` : `/`, `/login`, `/api/v1/health` | ✅ 404 ; `/.well-known/caldav` → `301 https://cal.…/dav/` (Davis suit le `X-Forwarded-Proto` de Caddy) |
+| Principal inconnu, avec un mot de passe | 404 `Principal with name abd not found` (avant l'authentification), pas 401 |
+| `Accept-Encoding: gzip` à travers Caddy | ✅ pas de `Content-Encoding`, ETag sans `-gzip`, `If-Match` → 204 ; en direct, Davis compresse |
+| CouchDB : sans mot de passe, `/_utils`, réglages, CORS depuis `capacitor://localhost` | ✅ 401, 404, `require_valid_user` à `true`, préflight 204 avec l'origine |
+| CouchDB avec `couchdb.ini` monté en lecture seule | ⚠️ ne démarre pas, sans un mot dans le journal : son entrypoint fait `chown` sur tout `/opt/couchdb` (`set -e`) et échoue sur ce fichier. Il appartient donc à l'utilisateur de CouchDB (5984) |
+| CouchDB recréé | ✅ même `uuid` (`local.d` dans un volume) |
+| Backend avant que mon utilisateur Davis existe, puis après | redémarre en boucle (401 de Davis), puis `/healthz` répond en ~15 s |
+| `update` : une bonne image, puis une image qui ne démarre pas | ✅ en place ; la seconde : l'ancienne image est remise et `update` échoue (code 1) |
+| Créer un utilisateur Davis | à la main : `/login` puis `/users/new` dans le tableau de bord ; Davis n'a ni commande ni API pour ça |

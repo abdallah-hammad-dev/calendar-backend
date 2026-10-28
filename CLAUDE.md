@@ -6,16 +6,19 @@ first)**; tested facts: `bench/TESTS.md`. The extension lives in `../calendar-ta
 https://github.com/abdallah-hammad-dev/calendar-tasks); its `docs/SPEC.md` §4.5–4.6 and §7.1 define what the
 backend must write. This repo is private.
 
-## State (2026-10-23)
+## State (2026-10-28)
 
-- Davis tested with the iPhone and the extension; runs locally only (bench), no deployment yet.
+- Davis tested with the iPhone and the extension; runs locally only (bench) so far.
 - B1 done (2026-10-22): Go skeleton, mirrors an ICS feed into Davis, sees my answers.
 - B2–B5 coded (2026-10-23): Google and Microsoft adapters, the RSVP relay, the accounts page (`run` serves it).
   Tested on API answers shaped from the references (adapters) and against the bench Davis (relay, page); **not yet
   on real accounts**: spec §11 lists what to check first.
-- Next (the user's order): deploy Davis, the backend and CouchDB (vault sync) on the VPS with `deploy.sh` and
-  CI/CD (spec §8), then test on real accounts and fix. Needs the user's domain (at Cloudflare), the Google Cloud
-  project and the Entra app (`docs/comptes.md`). Open questions in spec §11 are the user's to answer.
+- Deployment written (2026-10-28, spec §8): `deploy.sh` + `deploy/` + CI, the whole stack tested locally (Caddy's
+  own certificates); **not yet run on the VPS** (`my-vps`, hosts nothing else). Addresses:
+  `cal.` / `sync.` / `accounts.my.example.com`.
+- Next (the user's order): the DNS records, `./deploy.sh` (the user runs it: it asks for the VPS's sudo password),
+  a push to deploy the backend, then test on real accounts and fix. Needs the Google Cloud project and the Entra
+  app (`docs/comptes.md`). Open questions in spec §11 are the user's to answer.
 
 ## New machine
 
@@ -36,6 +39,9 @@ backend must write. This repo is private.
   (login: the Davis user).
 - `DAVIS_TEST_URL=… go test ./internal/web/` runs the whole sign-in (fake Google) against the bench Davis.
 - `podman build -t calendar-backend .` — the image (static binary on distroless, zones embedded).
+- `./deploy.sh [--new-key]` — installs or updates the VPS from `deploy/` (settings and secrets in `deploy/.env`,
+  git-ignored), checks before and after, sets CI's secrets. A push on `main` deploys the backend
+  (`.github/workflows/deploy.yml`: tests, image to ghcr.io, `deploy/update` on the VPS).
 - Go module lookups fail with Go's own DNS resolver on this machine: `GODEBUG=netdns=cgo go get …`.
 
 ## Layout
@@ -65,6 +71,8 @@ backend must write. This repo is private.
   `items` (source data, Davis href/etag, partstat written, answer in flight, what the relay sent and wrote),
   `settings` (the page's session key). Migrations by `PRAGMA user_version` (`schema.sql`, `schema2.sql`); never
   edit one once deployed (not deployed yet).
+- `deploy/` — the VPS's `compose.yaml` (Caddy, Davis, backend, CouchDB), `Caddyfile`, `couchdb.ini` (LiveSync's
+  settings; owned by CouchDB's uid 5984 on the VPS, or its entrypoint fails), `update` (CI's only command).
 
 ## Hard rules
 
@@ -83,4 +91,6 @@ backend must write. This repo is private.
   doesn't carry it from the Davis copy (a client's new answer clears it).
 - The Graph adapter follows next / delta links only under its base URL: the OAuth client adds the account's token
   to any URL it calls.
-- Commit and push only when the user says so.
+- Commit and push only when the user says so; a push on `main` also deploys the backend.
+- CI's key on the VPS runs `deploy/update` and nothing else: keep that script checking its input, never give the
+  `deploy` user more. Davis's dashboard and CouchDB's `/_utils` stay off the internet.

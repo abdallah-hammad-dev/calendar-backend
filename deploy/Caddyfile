@@ -1,0 +1,38 @@
+# HTTPS for the three addresses (Let's Encrypt). No `encode` anywhere: compression changes ETags.
+{
+	email {$ACME_EMAIL}
+}
+
+# Davis: CalDAV only. The dashboard and the rest stay on the VPS (SSH tunnel, deploy.sh).
+cal.{$DOMAIN} {
+	@dav path /dav /dav/* /.well-known/caldav
+	handle @dav {
+		reverse_proxy davis:9000 {
+			# Davis's own Caddy compresses when asked and then appends -gzip to its ETags: If-Match fails (412,
+			# bench/TESTS.md). Nobody asks: not the client, and not Go's transport (it would ask on its own).
+			header_up -Accept-Encoding
+			transport http {
+				compression off
+			}
+		}
+	}
+	handle {
+		respond 404
+	}
+}
+
+# CouchDB for Self-hosted LiveSync. Its web UI (/_utils) isn't public.
+sync.{$DOMAIN} {
+	@utils path /_utils /_utils/*
+	handle @utils {
+		respond 404
+	}
+	handle {
+		reverse_proxy couchdb:5984
+	}
+}
+
+# The backend's accounts page (its own login).
+accounts.{$DOMAIN} {
+	reverse_proxy backend:8080
+}

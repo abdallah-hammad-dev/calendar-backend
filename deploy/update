@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# The only thing CI's SSH key can do on the VPS: put a new backend image in place. deploy.sh installs it as
+# /opt/calendar/update (root's), and the deploy user's key runs it through sudo as its forced command:
+#   restrict,command="sudo -n /opt/calendar/update \"$SSH_ORIGINAL_COMMAND\"" ssh-ed25519 …
+# Argument: the image's digest (sha256:…) in GitHub's registry. Stdin: a token that can read it (the workflow run's
+# own, dead once the run ends), used for this pull only. If the new backend doesn't answer within a minute, the
+# previous image comes back and this fails.
+set -euo pipefail
+
+repo=ghcr.io/abdallah-hammad-dev/calendar-backend
+digest=${1-}
+if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "usage: update sha256:<digest>, the registry's token on stdin" >&2
+  exit 2
+fi
+IFS= read -r token || true
+if [[ ! $token =~ ^[A-Za-z0-9_]{20,}$ ]]; then
+  echo "update: no token on stdin" >&2
+  exit 2
+fi
+
+cd /opt/calendar
+exec 9>/run/calendar-update.lock
+flock -w 600 9
+
+# The token goes in a folder of its own, gone once pulled.
+creds=$(mktemp -d)
+trap 'rm -rf "$creds"' EXIT
+printf '%s' "$token" | DOCKER_CONFIG=$creds docker login ghcr.io -u abdallah-hammad-dev --password-stdin >/dev/null
+DOCKER_CONFIG=$creds docker pull -q "$repo@$digest" >/dev/null
+rm -rf "$creds"
+
+# The backend answers on /healthz once it has found my Davis user; asked from Caddy's container (it has wget).
+healthy() {
+  local until=$((SECONDS + 60))
+  while ((SECONDS < until)); do
+    if docker compose exec -T caddy wget -q -O /dev/null -T 3 http://backend:8080/healthz 2>/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+previous=$(docker image inspect -f '{{.Id}}' calendar-backend:current 2>/dev/null || true)
+new=$(docker image inspect -f '{{.Id}}' "$repo@$digest")
+docker tag "$new" calendar-backend:current
+docker compose up -d backend
+if healthy; then
+  if [[ -n $previous && $previous != "$new" ]]; then
+    docker tag "$previous" calendar-backend:previous # kept for a rollback by hand; the one before goes
+  fi
+  docker rmi "$repo@$digest" >/dev/null 2>&1 || true
+  docker image prune -f >/dev/null 2>&1 || true
+  echo "backend running $digest"
+  exit 0
+fi
+
+echo "update: the new backend doesn't answer (on the VPS: docker compose -f /opt/calendar/compose.yaml logs backend)" >&2
+if [[ -n $previous ]]; then
+  docker tag "$previous" calendar-backend:current
+  docker compose up -d backend
+  echo "update: the previous image is back" >&2
+fi
+exit 1

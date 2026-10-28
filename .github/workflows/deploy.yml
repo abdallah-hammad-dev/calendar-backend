@@ -1,0 +1,81 @@
+# A push on main: the tests, the backend's image into GitHub's registry, then the VPS takes it (deploy/update).
+# The VPS key (VPS_SSH_KEY, set by deploy.sh) can only start that update. Third-party code: GitHub's own two
+# actions, pinned by commit.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: push
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          image=ghcr.io/$GITHUB_REPOSITORY
+          printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            -t "$image:$GITHUB_SHA" .
+          docker push "$image:$GITHUB_SHA"
+          digest=$(docker image inspect -f '{{index .RepoDigests 0}}' "$image:$GITHUB_SHA")
+          digest=${digest#*@}
+          [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest after the push"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: image
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read # the token handed to the VPS can only read the image
+    steps:
+      - env:
+          KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          HOST: ${{ secrets.VPS_HOST }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$KEY" ] || [ -z "$KNOWN_HOSTS" ] || [ -z "$HOST" ]; then
+            echo "::error::VPS_SSH_KEY, VPS_KNOWN_HOSTS or VPS_HOST missing: run ./deploy.sh first"
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          printf '%s\n' "$TOKEN" | ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            "deploy@$HOST" "$DIGEST"

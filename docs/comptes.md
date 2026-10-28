@@ -3,12 +3,12 @@
 Une fois par serveur, avant d'ajouter des comptes sur la page des comptes. Chacun le fait pour son propre backend,
 avec ses propres comptes : rien n'est partagé.
 
-Il faut l'adresse de la page des comptes, `BASE_URL` (par exemple `https://comptes.mondomaine.fr`). L'« URI de
+Il faut l'adresse de la page des comptes, `BASE_URL` (sur le VPS : `https://accounts.my.example.com`). L'« URI de
 redirection » à donner à Google et à Microsoft est `BASE_URL/oauth/callback` ; la page l'affiche dans « Réglages ».
 Pour essayer en local, ajoute aussi `http://localhost:8080/oauth/callback` (les deux fournisseurs acceptent
 `localhost` en HTTP).
 
-Les valeurs obtenues vont dans `backend.env` (ou le `.env` du déploiement), jamais dans git :
+Les valeurs obtenues vont dans `backend.env` (ou `deploy/.env`, puis `./deploy.sh`), jamais dans git :
 
 ```
 GOOGLE_CLIENT_ID=…

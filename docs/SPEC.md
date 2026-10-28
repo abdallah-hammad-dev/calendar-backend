@@ -218,10 +218,10 @@ The provider then notifies the organizer from the invited address, and the next 
 
 ## 8. Deployment
 
-- **Where**: my existing VPS (next to the Minecraft server and the website); no new VPS needed.
-- **Domain** at Cloudflare (or reuse the website's), subdomains such as `cal.` (Davis) and one for the backend;
-  HTTPS with Let's Encrypt (also required for OAuth redirect URIs outside localhost). Minecraft stays "DNS only":
-  Cloudflare's proxy only handles HTTP.
+- **Where**: my VPS (`my-vps`, Ubuntu 26.04, 2 CPU, 3.7 GB), which hosts nothing else (2026-10-28, the user:
+  no Minecraft server nor website there any more); only SSH listened when checked, Docker not installed yet.
+- **Domain** at Cloudflare, subdomains such as `cal.` (Davis) and one for the backend; HTTPS with Let's Encrypt
+  (also required for OAuth redirect URIs outside localhost).
 - **No compression on `/dav/`** in the reverse proxy: Caddy then appends `-gzip` to `ETag` headers and `If-Match`
   fails (412, `bench/TESTS.md`). Davis's own Caddy already does it when asked; the backend asks for none.
 - **Easy to (re)deploy**: one compose file (Davis, backend, a reverse proxy with automatic HTTPS) and one `.env`
@@ -245,6 +245,27 @@ The provider then notifies the organizer from the invited address, and the next 
   - CI/CD (the user, to test and fix quickly): a push on `main` runs the tests, builds the backend's image, and the
     VPS takes it; GitHub's key can only start that update, not open a shell. BRAT does the same for the extension.
   - `cal.` and `sync.` "DNS only" at Cloudflare: its proxy may weaken ETags when compressing (the 412s of the bench).
+- **Built 2026-10-28** (`deploy/`, `deploy.sh`, `.github/workflows/deploy.yml`; the whole stack tested locally with
+  Caddy's own certificates, `bench/TESTS.md`; not yet run on the VPS):
+  - Addresses under one root (the user: one root, English names): `cal.my.example.com` (Davis),
+    `sync.…` (CouchDB), `accounts.…` (the accounts page), all "DNS only". Paths under one host (`/my/cal`…) were
+    set aside: one origin for the accounts page and two admin UIs we didn't write, Davis's absolute hrefs, and
+    `/.well-known/caldav` wanted at the host's root.
+  - Public: `/dav/` and `/.well-known/caldav` on `cal.` (Davis's dashboard and API answer 404: the dashboard is
+    on the VPS's `127.0.0.1:9000`, through an SSH tunnel), CouchDB's API without `/_utils`, the accounts page.
+  - Caddy drops `Accept-Encoding` toward Davis and asks for no compression itself (Go's transport would ask for
+    gzip on its own, unzip it and keep the `-gzip` ETag).
+  - My Davis user is made once by hand in the dashboard (Davis has no command or API for it): `deploy.sh` opens
+    the tunnel and waits until the user logs in with its address.
+  - CI: tests, the image into GitHub's registry (private), then SSH as `deploy` on the VPS, whose key's forced
+    command is `sudo /opt/calendar/update <digest>` and nothing else (no shell, no forwarding; sudo for that
+    script only). The workflow hands its own token (`packages: read`, dead once the run ends) on stdin: no
+    registry secret on the VPS. `update` pulls by digest, restarts the backend, and puts the previous image back
+    if `/healthz` doesn't answer within a minute. Changes to the rest (compose, Caddy, Davis, CouchDB) go through
+    `deploy.sh`, run by hand.
+  - Docker from Docker's own repository (the user, 2026-10-29, after weighing Ubuntu's `docker.io`), added to
+    `unattended-upgrades` by `deploy.sh` so it updates by itself like the system.
+  - Not done yet: backups of the databases, moving my data from the bench.
 
 ## 9. Part 2: organizing meetings
 
@@ -316,7 +337,8 @@ organize, the `X-CALTASKS-SEND-STATE` line, "Copy link" on the card.
 ## 10. Milestones (in order)
 
 - **B0 — Deploy Davis.** Compose + reverse proxy + domain on the VPS; move my data from the bench; the iPhone and
-  Obsidian on the real address. *Needs me: the domain, VPS access.*
+  Obsidian on the real address. *Needs me: the domain, VPS access.* *Written 2026-10-28* (`deploy.sh`, §8),
+  tested locally; to run on the VPS.
 - **B1 — Go skeleton.** Config, SQLite, Davis CalDAV client (write mirror events, sync-collection), runs locally
   against the bench Davis. *Done 2026-10-22*, with the ICS feed adapter as its first source (§4).
 - **B2 — Google, read.** OAuth (localhost first), mirror with the §5.2 checklist, tests on recorded API answers.
@@ -331,7 +353,7 @@ organize, the `X-CALTASKS-SEND-STATE` line, "Copy link" on the card.
   B2–B5 coded first, then B0 and B7 together (Davis, the backend, then the vault sync, on the VPS), then tests on
   my accounts and fixes.
 - **B6 — The generic adapter** (§4, once decided).
-- **B7 — Backend in production** on the VPS.
+- **B7 — Backend in production** on the VPS. *Written 2026-10-28* with B0: CI deploys it on each push to `main`.
 - Then part 2 (§9).
 
 ## 11. Open questions

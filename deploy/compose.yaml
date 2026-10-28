@@ -1,0 +1,94 @@
+# The server, on the VPS in /opt/calendar (deploy.sh puts it there): Caddy (HTTPS) in front of Davis, the backend
+# and CouchDB (the vault's sync). Values come from .env next to this file (root only); each service gets only its
+# own. The backend's image comes from CI (update), the others are pinned here.
+name: calendar
+
+services:
+  caddy:
+    image: docker.io/library/caddy:2.11.7
+    restart: unless-stopped
+    # The only published ports (Docker's go around ufw).
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+  davis:
+    image: ghcr.io/tchapi/davis-standalone:5.5.0
+    restart: unless-stopped
+    # The dashboard: on the VPS only, through an SSH tunnel (deploy.sh). Caddy serves CalDAV alone.
+    ports:
+      - "127.0.0.1:9000:9000"
+    environment:
+      APP_ENV: prod
+      APP_SECRET: ${DAVIS_APP_SECRET}
+      APP_TIMEZONE: ${TIMEZONE}
+      DATABASE_DRIVER: sqlite
+      DATABASE_URL: sqlite:////data/davis-database.db
+      CALDAV_ENABLED: "true"
+      CARDDAV_ENABLED: "false"
+      WEBDAV_ENABLED: "false"
+      PUBLIC_CALENDARS_ENABLED: "false"
+      ADMIN_LOGIN: admin
+      ADMIN_PASSWORD: ${DAVIS_ADMIN_PASSWORD}
+      ADMIN_AUTH_BYPASS: "false"
+      AUTH_METHOD: Basic
+      AUTH_REALM: SabreDAV
+      # Empty: the backend relays my answers, Davis must not send a second one.
+      INVITE_FROM_ADDRESS: ""
+      MAILER_DSN: null://null
+      SYMFONY_TRUSTED_PROXIES: REMOTE_ADDR
+      # No log file: on an error Davis writes the whole request there, the Basic password included.
+      LOG_FILE_PATH: /dev/null
+    volumes:
+      - davis-data:/data
+
+  backend:
+    image: calendar-backend:current
+    pull_policy: never
+    restart: unless-stopped
+    depends_on:
+      - davis
+    environment:
+      DAVIS_URL: http://davis:9000/dav/
+      DAVIS_USER: ${DAVIS_USER}
+      DAVIS_PASSWORD: ${DAVIS_PASSWORD}
+      VAULT: ${VAULT}
+      TIMEZONE: ${TIMEZONE}
+      BASE_URL: https://accounts.${DOMAIN}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET}
+      MICROSOFT_TENANT: ${MICROSOFT_TENANT}
+    volumes:
+      - backend-data:/data
+
+  couchdb:
+    image: docker.io/library/couchdb:3.5.3
+    restart: unless-stopped
+    environment:
+      COUCHDB_USER: ${COUCHDB_USER}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD}
+      COUCHDB_SECRET: ${COUCHDB_SECRET}
+    volumes:
+      - couchdb-data:/opt/couchdb/data
+      # local.d kept: the node's uuid and admin written there at the first start stay across new containers.
+      - couchdb-config:/opt/couchdb/etc/local.d
+      # Owned by CouchDB's user (5984, deploy.sh): its entrypoint would chown it and fail on a read-only file.
+      - ./couchdb.ini:/opt/couchdb/etc/local.d/10-livesync.ini:ro
+
+volumes:
+  caddy-data:
+  caddy-config:
+  davis-data:
+  backend-data:
+  couchdb-data:
+  couchdb-config:
