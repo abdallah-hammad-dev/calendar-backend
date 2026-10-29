@@ -218,3 +218,9 @@ backend construit par le `Dockerfile`.
 | Backend avant que mon utilisateur Davis existe, puis après | redémarre en boucle (401 de Davis), puis `/healthz` répond en ~15 s |
 | `update` : une bonne image, puis une image qui ne démarre pas | ✅ en place ; la seconde : l'ancienne image est remise et `update` échoue (code 1) |
 | Créer un utilisateur Davis | à la main : `/login` puis `/users/new` dans le tableau de bord ; Davis n'a ni commande ni API pour ça |
+
+Sur le VPS (2026-10-29) : tout en place du premier coup, sauf `update` dans la CI. Il refusait le jeton du workflow
+(« no token on stdin ») : il arrivait bien (sudo-rs, le sudo d'Ubuntu 26.04, passe l'entrée standard sans
+terminal, vérifié dans un conteneur 26.04), mais les jetons de GitHub ne sont plus faits que de lettres, chiffres et
+`_`. `update` n'en suppose plus la forme. Aussi : l'utilisateur Davis créé avec le mot de passe admin au lieu de
+`DAVIS_PASSWORD` donne un 401, et `deploy.sh` redemande l'étape.

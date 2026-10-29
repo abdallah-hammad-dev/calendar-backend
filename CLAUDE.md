@@ -13,12 +13,12 @@ backend must write. This repo is private.
 - B2–B5 coded (2026-10-23): Google and Microsoft adapters, the RSVP relay, the accounts page (`run` serves it).
   Tested on API answers shaped from the references (adapters) and against the bench Davis (relay, page); **not yet
   on real accounts**: spec §11 lists what to check first.
-- Deployment written (2026-10-28, spec §8): `deploy.sh` + `deploy/` + CI, the whole stack tested locally (Caddy's
-  own certificates); **not yet run on the VPS** (`my-vps`, hosts nothing else). Addresses:
-  `cal.` / `sync.` / `accounts.my.example.com`.
-- Next (the user's order): the DNS records, `./deploy.sh` (the user runs it: it asks for the VPS's sudo password),
-  a push to deploy the backend, then test on real accounts and fix. Needs the Google Cloud project and the Entra
-  app (`docs/comptes.md`). Open questions in spec §11 are the user's to answer.
+- **Deployed 2026-10-29** (spec §8) on `my-vps` (hosts nothing else): `cal.` / `sync.` /
+  `accounts.my.example.com`, Let's Encrypt certificates, my Davis user `abd`. Each push on `main`
+  deploys the backend (CI, ~2 min). The VPS's sudo is sudo-rs (Ubuntu 26.04).
+- Next: the iPhone, Obsidian and LiveSync on the real addresses; the Google Cloud project and the Entra app
+  (`docs/comptes.md`) into `deploy/.env` then `./deploy.sh`; test on real accounts and fix. Not done: backups,
+  moving my data from the bench. Open questions in spec §11 are the user's to answer.
 
 ## New machine
 

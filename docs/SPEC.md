@@ -245,8 +245,8 @@ The provider then notifies the organizer from the invited address, and the next 
   - CI/CD (the user, to test and fix quickly): a push on `main` runs the tests, builds the backend's image, and the
     VPS takes it; GitHub's key can only start that update, not open a shell. BRAT does the same for the extension.
   - `cal.` and `sync.` "DNS only" at Cloudflare: its proxy may weaken ETags when compressing (the 412s of the bench).
-- **Built 2026-10-28** (`deploy/`, `deploy.sh`, `.github/workflows/deploy.yml`; the whole stack tested locally with
-  Caddy's own certificates, `bench/TESTS.md`; not yet run on the VPS):
+- **Built 2026-10-28, deployed 2026-10-29** (`deploy/`, `deploy.sh`, `.github/workflows/deploy.yml`; the whole
+  stack first tested locally with Caddy's own certificates, `bench/TESTS.md`):
   - Addresses under one root (the user: one root, English names): `cal.my.example.com` (Davis),
     `sync.…` (CouchDB), `accounts.…` (the accounts page), all "DNS only". Paths under one host (`/my/cal`…) were
     set aside: one origin for the accounts page and two admin UIs we didn't write, Davis's absolute hrefs, and
