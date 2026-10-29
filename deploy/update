@@ -14,8 +14,11 @@ if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
   exit 2
 fi
 IFS= read -r token || true
-if [[ ! $token =~ ^[A-Za-z0-9_]{20,}$ ]]; then
-  echo "update: no token on stdin" >&2
+token=${token%$'\r'}
+# No format assumed (GitHub's tokens changed shape: not only letters, digits and _); it only goes to docker login's
+# stdin.
+if [[ ! $token =~ ^[[:graph:]]{20,4096}$ ]]; then
+  echo "update: no token on stdin (${#token} characters read)" >&2
   exit 2
 fi
 
