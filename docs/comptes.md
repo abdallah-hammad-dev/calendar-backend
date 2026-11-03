@@ -27,17 +27,22 @@ Sur <https://console.cloud.google.com>, avec ton compte Google :
 
 1. **Projet** : en haut, sélecteur de projet → Nouveau projet, par exemple `calendar-backend`.
 2. **API** : APIs et services → Bibliothèque → « Google Calendar API » → Activer.
-3. **Écran de consentement** (Google Auth Platform) → Commencer : nom de l'application (`Calendrier`), ton
-   adresse, audience **Externe**, adresse de contact.
-4. **Accès aux données** → Ajouter des champs d'application : `…/auth/calendar.events`, `openid`,
-   `…/auth/userinfo.email` → Enregistrer.
-5. **Audience** → **Publier l'application** (statut « En production »). Indispensable : une application laissée
+3. **Écran de consentement** (Google Auth Platform) → Premiers pas : nom de l'application (par exemple
+   `Calendar Tasks Sync` ; ni « Google » ni une marque), ton adresse, audience **Externe** (« Interne » n'existe
+   que pour Google Workspace), adresse de contact.
+4. **Branding** (exigé avant de publier) : page d'accueil `BASE_URL`, règles de confidentialité
+   `BASE_URL/privacy` (la page des comptes la sert, publique), domaine autorisé : le domaine racine (sur le VPS
+   `example.com`), pas de logo (un logo demande une validation par Google).
+5. **Accès aux données** → Ajouter ou supprimer des champs d'application : `openid`, `…/auth/userinfo.email`, et
+   `https://www.googleapis.com/auth/calendar.events` (s'il n'est pas dans la liste : « Ajouter manuellement ») →
+   Mettre à jour → Enregistrer.
+6. **Audience** → **Publier l'application** (statut « En production »). Indispensable : une application laissée
    « En test » perd sa connexion au bout de 7 jours. Pas besoin de la faire valider par Google pour un usage
    perso : à la connexion, Google affiche « Google n'a pas validé cette application » → Paramètres avancés →
-   Accéder à Calendrier.
-6. **Clients** → Créer un client → type **Application Web** → URI de redirection autorisés : ton
+   Accéder à <nom de l'application>.
+7. **Clients** → Créer un client → type **Application Web** → URI de redirection autorisés : ton
    `BASE_URL/oauth/callback` (et celui de `localhost` pour les essais) → Créer.
-7. Copie l'**ID client** et le **code secret du client** tout de suite : Google ne montre le secret qu'à la
+8. Copie l'**ID client** et le **code secret du client** tout de suite : Google ne montre le secret qu'à la
    création (sinon, en ajouter un nouveau).
 
 Ce que le backend demande : lire et modifier tes événements (copie dans Davis, tes réponses aux invitations, plus
@@ -45,8 +50,11 @@ tard les liens Meet) et ton adresse. Pas tes mails.
 
 ## Microsoft (Outlook.com, école, travail)
 
-Sur <https://entra.microsoft.com> (ou le portail Azure → Microsoft Entra ID), avec un compte Microsoft. S'il
-n'a pas encore d'annuaire, Microsoft propose d'en créer un (gratuit).
+Sur <https://entra.microsoft.com> (ou le portail Azure → Microsoft Entra ID), avec un compte qui a un annuaire.
+Depuis juin 2024, une application doit être inscrite dans un annuaire, et un compte personnel n'en reçoit plus
+d'office : il faut passer par un compte Azure ou le programme développeur Microsoft 365, et des utilisateurs
+signalent des blocages ou une carte bancaire demandée (pas essayé, `bench/TESTS.md`). Un compte d'école a déjà le
+sien : voir « Compte de l'école » plus bas.
 
 1. **Inscriptions d'applications** → Nouvelle inscription :
    - nom : `calendar-backend` ;
@@ -61,13 +69,21 @@ n'a pas encore d'annuaire, Microsoft propose d'en créer un (gratuit).
 5. **Autorisations des API** → Ajouter → Microsoft Graph → Autorisations déléguées : `Calendars.ReadWrite`,
    `offline_access`, `openid`, `email`.
 
-`MICROSOFT_TENANT` reste `common` : comptes personnels et de n'importe quelle organisation.
+`MICROSOFT_TENANT` reste `common` : comptes personnels et de n'importe quelle organisation (sauf application
+inscrite dans l'annuaire de l'école, ci-dessous).
 
-**Compte de l'école** : certaines écoles bloquent les applications qu'elles ne connaissent pas (message
-`AADSTS65001` ou `AADSTS90094`, « besoin de l'approbation d'un administrateur »). Le plan B (spec §4) : publier le
-calendrier de l'école en lien ICS (Outlook web → Calendrier → Paramètres → Calendriers partagés → Publier un
-calendrier) et l'ajouter sur la page comme « calendrier publié » ; il est en lecture seule (tes réponses ne
-partent pas).
+**Compte de l'école** : Microsoft renvoie vers un administrateur une application récente de plusieurs annuaires, sans
+éditeur vérifié, qui demande plus que les droits de base, et une école peut aussi bloquer les applications qu'elle ne
+connaît pas (message `AADSTS65001` ou `AADSTS90094`, « besoin de l'approbation d'un administrateur »). Deux essais,
+dans l'ordre :
+
+1. **Inscrire l'application dans l'annuaire de l'école**, connecté avec le compte de l'école, si elle le permet.
+   Types de comptes : **cet annuaire organisationnel uniquement** ; `MICROSOFT_TENANT` = l'« ID de l'annuaire
+   (locataire) » de la page de l'application, au lieu de `common`. Seuls les comptes de l'école peuvent alors se
+   connecter, et ses administrateurs voient l'application.
+2. **Le plan B** (spec §4) : publier le calendrier de l'école en lien ICS (Outlook web → Calendrier → Paramètres →
+   Calendriers partagés → Publier un calendrier) et l'ajouter sur la page comme « calendrier publié » ; il est en
+   lecture seule (tes réponses ne partent pas).
 
 ## Ajouter un compte
 

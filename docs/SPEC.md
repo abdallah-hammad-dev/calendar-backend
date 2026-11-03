@@ -358,7 +358,9 @@ organize, the `X-CALTASKS-SEND-STATE` line, "Copy link" on the card.
 
 ## 11. Open questions
 
-- My actual addresses (Gmail? Outlook personal? school Microsoft? others?): sets the order and the generic adapter.
+- My actual addresses: Gmail and a school Microsoft account, 2026-11-01. Others? Sets the generic adapter.
+- The school's Entra route: a multi-tenant app without a verified publisher is likely stepped up to an admin, so try
+  an app registered in the school's own directory (`docs/comptes.md`), then the ICS link (`bench/TESTS.md`).
 - Generic adapter: CalDAV or IMAP + SMTP (§4).
 - Does Apple Calendar show its "Join" button for a `CONFERENCE`-only event? (on the VPS: one event with
   `CONFERENCE` only, one with the link in the notes, one with it in the place; and whether two of them make two

@@ -224,3 +224,22 @@ Sur le VPS (2026-10-29) : tout en place du premier coup, sauf `update` dans la C
 terminal, vérifié dans un conteneur 26.04), mais les jetons de GitHub ne sont plus faits que de lettres, chiffres et
 `_`. `update` n'en suppose plus la forme. Aussi : l'utilisateur Davis créé avec le mot de passe admin au lieu de
 `DAVIS_PASSWORD` donne un 401, et `deploy.sh` redemande l'étape.
+
+## Microsoft, avant le premier compte réel (2026-11-01)
+
+Lu dans la documentation et les forums de Microsoft, **pas encore essayé** :
+
+- Une application Entra doit être dans un annuaire depuis juin 2024, et un compte personnel n'en reçoit plus d'office.
+  Aucune voie officielle gratuite et sans carte trouvée : compte Azure, programme développeur Microsoft 365 et
+  inscription Power Apps sont cités, avec des blocages signalés par des utilisateurs (pas une règle officielle).
+- Une application récente de plusieurs annuaires, sans éditeur vérifié, qui demande plus que les droits de base :
+  le consentement de l'utilisateur est renvoyé vers un administrateur (`AADSTS90094`). `Calendars.ReadWrite` n'est pas
+  un droit de base. D'où l'essai d'une application inscrite dans l'annuaire de l'école (`docs/comptes.md`).
+
+Constaté : le compte de l'école est un compte Microsoft. Le connecteur Microsoft 365 de Claude y a ses
+droits de lecture (dont `Calendars.Read`). Ça montre que l'école laisse passer cette application-là, pas une inconnue.
+
+Rediriger les mails de l'école vers Gmail (lu, **pas essayé**) : Exchange Online bloque souvent la redirection externe
+automatique (`550 5.7.520`, réglage de la stratégie anti-spam sortante, désactivée par défaut pour beaucoup
+d'organisations depuis 2021). Si elle passe, une réponse donnée côté Gmail ne revient en général pas à l'organisateur
+d'une invitation envoyée à une autre adresse, et notre `RSVP` Google refuse un événement sans participant `self`.
