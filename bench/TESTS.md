@@ -243,3 +243,9 @@ Rediriger les mails de l'école vers Gmail (lu, **pas essayé**) : Exchange Onli
 automatique (`550 5.7.520`, réglage de la stratégie anti-spam sortante, désactivée par défaut pour beaucoup
 d'organisations depuis 2021). Si elle passe, une réponse donnée côté Gmail ne revient en général pas à l'organisateur
 d'une invitation envoyée à une autre adresse, et notre `RSVP` Google refuse un événement sans participant `self`.
+
+**Essayé le 2026-11-03.** Une app inscrite avec le compte de l'école dans l'annuaire de l'école (un seul annuaire,
+`MICROSOFT_TENANT` = son ID) : l'inscription passe, mais la connexion affiche « Approval required » pour
+`offline_access`, `Calendars.ReadWrite` et le profil. L'école ne laisse pas les étudiants consentir eux-mêmes, même à
+une app de son propre annuaire. Son circuit de demande est actif : un champ de justification et un bouton « Request
+approval ». Google (Gmail) : connecté le même jour, première passe sans erreur.
