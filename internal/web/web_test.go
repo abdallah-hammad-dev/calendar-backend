@@ -113,6 +113,12 @@ func TestLoginAndSession(t *testing.T) {
 	if resp, _ := e.get(t, "/"); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/login" {
 		t.Fatalf("not logged in: %s %s", resp.Status, resp.Header.Get("Location"))
 	}
+	if resp, body := e.get(t, "/privacy"); resp.StatusCode != http.StatusOK || !strings.Contains(body, "utilisation limitée") {
+		t.Fatalf("privacy policy without logging in: %s", resp.Status)
+	}
+	if _, body := e.get(t, "/login"); !strings.Contains(body, `href="/privacy"`) {
+		t.Fatal("the login page has no link to the privacy policy")
+	}
 	if resp := e.post(t, "/sync", nil); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("an action without logging in: %s", resp.Status)
 	}

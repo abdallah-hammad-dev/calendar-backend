@@ -97,6 +97,8 @@ func (s *Server) Handler(ctx context.Context) (http.Handler, error) {
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.logout)
+	// Public: Google wants a privacy policy's address before an app leaves "Testing" (docs/comptes.md).
+	mux.HandleFunc("GET /privacy", func(w http.ResponseWriter, r *http.Request) { s.render(w, http.StatusOK, "privacy", page{}) })
 	mux.Handle("GET /{$}", s.auth(s.home))
 	mux.Handle("POST /accounts/ics", s.auth(s.addFeed))
 	mux.Handle("POST /accounts/{kind}/connect", s.auth(s.connect))

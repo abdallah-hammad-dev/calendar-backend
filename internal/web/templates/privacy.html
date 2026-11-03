@@ -1,0 +1,43 @@
+{{define "privacy"}}{{template "head"}}
+<header><h1>Règles de confidentialité</h1><a href="/">Page des comptes</a></header>
+<section class="card">
+  <p>Ce serveur est personnel : il appartient à une seule personne, et elle seule y relie ses comptes Google ou
+  Microsoft, après s'être connectée avec son propre compte de calendrier. Il copie le calendrier de ces comptes dans
+  son serveur de calendrier (CalDAV) et renvoie ses réponses aux invitations.</p>
+</section>
+<section class="card">
+  <h2>Données lues</h2>
+  <ul>
+    <li><strong>Google</strong> : les événements de l'agenda principal (droit <code>calendar.events</code>) et
+      l'adresse e-mail du compte (<code>openid</code>, <code>email</code>).</li>
+    <li><strong>Microsoft</strong> : les événements du calendrier (<code>Calendars.ReadWrite</code>) et l'adresse du
+      compte.</li>
+  </ul>
+  <p>Aucun mail n'est lu.</p>
+</section>
+<section class="card">
+  <h2>Utilisation</h2>
+  <ul>
+    <li>Les événements sont copiés dans le serveur de calendrier de cette personne, pour ses propres appareils.</li>
+    <li>Quand elle répond à une invitation (accepter, peut-être, refuser), la réponse part chez l'organisateur depuis
+      le compte invité. Le serveur n'écrit rien d'autre chez Google ou Microsoft.</li>
+    <li>Ce serveur ne vend rien, ne partage rien avec des tiers, et n'utilise ces données ni pour de la publicité ni
+      pour entraîner un modèle d'IA.</li>
+  </ul>
+  <p>L'utilisation des informations reçues des API Google respecte le
+  <a href="https://developers.google.com/terms/api-services-user-data-policy">règlement relatif aux données
+  utilisateur des services d'API Google</a>, y compris les exigences d'utilisation limitée.</p>
+</section>
+<section class="card">
+  <h2>Stockage</h2>
+  <p>Tout reste sur ce serveur : les jetons de connexion dans sa base de données, les événements dans son serveur de
+  calendrier. Les échanges passent en HTTPS.</p>
+</section>
+<section class="card">
+  <h2>Retirer un compte</h2>
+  <p>Sur la page des comptes, « Retirer » efface la connexion et ses jetons, et, au choix, les événements copiés.
+  L'accès peut aussi être révoqué chez le fournisseur : <a href="https://myaccount.google.com/connections">Google</a>,
+  <a href="https://myapplications.microsoft.com">Microsoft (école, travail)</a> ou
+  <a href="https://account.live.com/consent/Manage">Microsoft (compte personnel)</a>.</p>
+</section>
+{{template "foot"}}{{end}}
