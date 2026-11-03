@@ -9,60 +9,73 @@
 {{if .Notice}}<div class="notice">{{.Notice}}</div>{{end}}
 {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
 
-<section class="card">
-  <h2>Mes comptes</h2>
-  {{range .Accounts}}
-  <div class="account">
+<h2 class="section" id="comptes">Mes comptes</h2>
+{{range .Accounts}}
+<section class="card account">
+  {{template "logo" .Kind}}
+  <div class="who">
     <div class="account-head">
       <span class="name">{{.Name}}</span>
-      <span class="badge">{{kind .Kind}}</span>
       {{if .LastError}}<span class="badge bad">Erreur</span>{{end}}
     </div>
-    <div class="muted">{{if ne .Name .Address}}{{.Address}} · {{end}}{{.CollectionName}} · synchro {{.LastSyncText}}</div>
-    {{if .LastError}}<div class="err">{{if .SignInOver}}Connexion expirée : reconnecte ce compte.{{else}}{{.LastError}}{{end}}</div>{{end}}
-    <div class="row">
-      {{if .SignIn}}
-      <form class="inline" method="post" action="/accounts/{{.Kind}}/connect">
-        <input type="hidden" name="account" value="{{.ID}}">
-        <button type="submit"{{if .SignInOver}} class="primary"{{end}}>Reconnecter</button>
-      </form>
-      {{end}}
-      <details>
-        <summary>Retirer</summary>
-        <form method="post" action="/accounts/{{.ID}}/remove">
-          <label class="choice"><input type="radio" name="events" value="delete" required> Supprimer ses événements</label>
-          <label class="choice"><input type="radio" name="events" value="keep"> Les garder (plus mis à jour)</label>
-          <button type="submit" class="danger">Retirer {{.Name}}</button>
-        </form>
-      </details>
-    </div>
+    <div class="muted">{{kind .Kind}}{{if ne .Name .Address}} · {{.Address}}{{end}} · dans {{.CollectionName}} · synchro {{.LastSyncText}}</div>
   </div>
-  {{else}}
-  <p class="muted">Aucun compte.</p>
-  {{end}}
+  <div class="actions">
+    {{if .SignIn}}
+    <form class="inline" method="post" action="/accounts/{{.Kind}}/connect">
+      <input type="hidden" name="account" value="{{.ID}}">
+      <button type="submit"{{if .SignInOver}} class="primary"{{end}}>Reconnecter</button>
+    </form>
+    {{end}}
+    <a class="button danger" href="#retirer-{{.ID}}">Retirer</a>
+  </div>
+  {{if .LastError}}<div class="err">{{if .SignInOver}}Connexion expirée : reconnecte ce compte.{{else}}{{.LastError}}{{end}}</div>{{end}}
+  <form class="confirm" id="retirer-{{.ID}}" method="post" action="/accounts/{{.ID}}/remove">
+    <strong>Retirer {{.Name}} ?</strong>
+    <label class="choice"><input type="radio" name="events" value="delete" required> Supprimer ses événements</label>
+    <label class="choice"><input type="radio" name="events" value="keep"> Les garder (plus mis à jour)</label>
+    <div class="row">
+      <button type="submit" class="danger">Retirer</button>
+      <a class="button" href="#comptes">Annuler</a>
+    </div>
+  </form>
 </section>
+{{else}}
+<div class="card"><p class="muted">Aucun compte pour l'instant.</p></div>
+{{end}}
 
 {{if .Collections}}
 <h2 class="section">Ajouter un compte</h2>
-<section class="adds">
-  {{template "add" (card .Google .Collections)}}
-  {{template "add" (card .Microsoft .Collections)}}
-  <form class="card" method="post" action="/accounts/ics">
-    <h2>Calendrier publié <span class="badge">ICS</span></h2>
-    <label for="i-name">Nom</label>
-    <input id="i-name" type="text" name="name" required placeholder="Emploi du temps">
-    <label for="i-address">Mon adresse sur ce compte</label>
-    <input id="i-address" type="email" name="address" required placeholder="moi@ecole.fr">
-    <label for="i-url">Lien du calendrier</label>
-    <input id="i-url" type="url" name="url" required placeholder="https://…/calendar.ics">
-    <label for="i-collection">Collection</label>
-    <select id="i-collection" name="collection" required>{{range .Collections}}
-      <option value="{{.Href}}">{{.DisplayName}}</option>{{end}}
-    </select>
-    <div class="row"><button type="submit" class="primary">Ajouter</button></div>
-    <p class="muted">Lecture seule : tes réponses ne partent pas.</p>
-  </form>
-</section>
+{{template "add" (card .Google .Collections)}}
+{{template "add" (card .Microsoft .Collections)}}
+<form class="card add" method="post" action="/accounts/ics">
+  <div class="add-head">
+    {{template "logo" "ics"}}
+    <div>
+      <h3>Calendrier publié</h3>
+      <p class="muted">Un lien .ics, en lecture seule : tes réponses ne partent pas.</p>
+    </div>
+  </div>
+  <div class="fields">
+    <div class="wide">
+      <label for="i-url">Lien .ics</label>
+      <input id="i-url" type="url" name="url" required placeholder="https://…/calendar.ics">
+    </div>
+    <div>
+      <label for="i-name">Nom</label>
+      <input id="i-name" type="text" name="name" required placeholder="Emploi du temps">
+    </div>
+    <div>
+      <label for="i-address">Mon adresse dans ce calendrier</label>
+      <input id="i-address" type="email" name="address" required placeholder="moi@ecole.fr">
+    </div>
+    <div>
+      <label for="i-collection">Dans le calendrier</label>
+      {{template "collections" (collections "i-collection" .Collections)}}
+    </div>
+  </div>
+  <div class="row"><button type="submit" class="primary">Ajouter</button></div>
+</form>
 {{else if not .Error}}
 <div class="card"><p class="muted">Aucune collection d'événements dans Davis : crée-en une (iPhone ou Obsidian).</p></div>
 {{end}}
@@ -80,18 +93,35 @@
 </section>
 {{template "foot"}}{{end}}
 
+{{define "logo"}}<span class="logo {{.}}" aria-hidden="true">{{if eq . "google"}}G{{else if eq . "microsoft"}}M{{else}}ICS{{end}}</span>{{end}}
+
+{{define "collections"}}<select id="{{.ID}}" name="collection" required>{{range .List}}
+  <option value="{{.Href}}">{{.DisplayName}}</option>{{end}}
+</select>{{end}}
+
 {{/* A Google or Microsoft account to add: greyed out until its connection is set. */}}
 {{define "add"}}
-<form class="card" method="post" action="/accounts/{{.P.Kind}}/connect">
-  <h2>{{.P.Label}}{{if not .P.On}} <a class="badge" href="#{{.P.Kind}}">À configurer</a>{{end}}</h2>
+<form class="card add" method="post" action="/accounts/{{.P.Kind}}/connect">
+  <div class="add-head">
+    {{template "logo" .P.Kind}}
+    <div>
+      <h3>{{.P.Label}}</h3>
+      <p class="muted">{{if eq .P.Kind "google"}}Google Agenda{{else}}Outlook, Microsoft 365{{end}} : événements et réponses aux invitations.</p>
+    </div>
+    {{if not .P.On}}<a class="badge" href="#{{.P.Kind}}">À configurer</a>{{end}}
+  </div>
   <fieldset{{if not .P.On}} disabled{{end}}>
-    <label for="{{.P.Kind}}-name">Nom</label>
-    <input id="{{.P.Kind}}-name" type="text" name="name" placeholder="{{if eq .P.Kind "google"}}Gmail{{else}}École{{end}}">
-    <label for="{{.P.Kind}}-collection">Collection</label>
-    <select id="{{.P.Kind}}-collection" name="collection" required>{{range .Collections}}
-      <option value="{{.Href}}">{{.DisplayName}}</option>{{end}}
-    </select>
-    <div class="row"><button type="submit" class="primary">Se connecter</button></div>
+    <div class="fields">
+      <div>
+        <label for="{{.P.Kind}}-name">Nom <span class="opt">facultatif</span></label>
+        <input id="{{.P.Kind}}-name" type="text" name="name" placeholder="Par défaut : l'adresse du compte">
+      </div>
+      <div>
+        <label for="{{.P.Kind}}-collection">Dans le calendrier</label>
+        {{template "collections" (collections (printf "%s-collection" .P.Kind) .Collections)}}
+      </div>
+    </div>
+    <div class="row"><button type="submit" class="primary">Se connecter à {{.P.Label}}</button></div>
   </fieldset>
 </form>
 {{end}}

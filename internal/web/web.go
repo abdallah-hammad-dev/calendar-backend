@@ -42,11 +42,18 @@ var pages = template.Must(template.New("").Funcs(template.FuncMap{
 	"kind": kindLabel,
 	// card: a Google or Microsoft "add" card, its sign-in and the collections offered.
 	"card": func(p provider, c []davis.Calendar) addCard { return addCard{P: p, Collections: c} },
+	// collections: the select of collections an account writes into, with its element ID.
+	"collections": func(id string, c []davis.Calendar) collectionSelect { return collectionSelect{ID: id, List: c} },
 }).ParseFS(templates, "templates/*.html"))
 
 type addCard struct {
 	P           provider
 	Collections []davis.Calendar
+}
+
+type collectionSelect struct {
+	ID   string
+	List []davis.Calendar
 }
 
 // CallbackPath is where providers send the browser back after sign-in: BASE_URL + CallbackPath is the redirect URI
@@ -452,10 +459,7 @@ func (s *Server) connect(w http.ResponseWriter, r *http.Request) {
 		}
 		in.AccountID = a.ID
 	} else {
-		in.Name = strings.TrimSpace(r.PostFormValue("name"))
-		if in.Name == "" {
-			in.Name = kindLabel(kind)
-		}
+		in.Name = strings.TrimSpace(r.PostFormValue("name")) // none: the account's address, once known
 		c, err := s.Engine.Collection(r.Context(), r.PostFormValue("collection"))
 		if err != nil {
 			s.problem(w, "Choisis une collection : "+err.Error())
@@ -539,6 +543,9 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.duplicate(ctx, in.Kind, address, w) {
 		return
+	}
+	if in.Name == "" {
+		in.Name = address
 	}
 	if _, err := s.Engine.AddAccount(ctx, store.Account{Kind: in.Kind, Name: in.Name, Address: address, Config: config},
 		in.Collection); err != nil {

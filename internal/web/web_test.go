@@ -326,18 +326,19 @@ func TestSignInAgainstDavis(t *testing.T) {
 		return e.get(t, CallbackPath+"?code=the-code&state="+url.QueryEscape(loc.Query().Get("state")))
 	}
 
-	resp, _ := signIn(url.Values{"name": {"Gmail"}, "collection": {coll}})
+	resp, _ := signIn(url.Values{"name": {""}, "collection": {coll}})
 	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/?ok=added" {
 		t.Fatalf("callback: %s %s", resp.Status, resp.Header.Get("Location"))
 	}
 	list, _ := e.store.Accounts(ctx)
-	if len(list) != 1 || list[0].Address != "me@gmail.com" || list[0].Kind != "google" || !davis.SamePath(list[0].Collection, coll) {
+	if len(list) != 1 || list[0].Address != "me@gmail.com" || list[0].Name != "me@gmail.com" || list[0].Kind != "google" ||
+		!davis.SamePath(list[0].Collection, coll) {
 		t.Fatalf("accounts: %+v", list)
 	}
 	if s, err := oauth.Load(list[0].Config); err != nil || s.Token.RefreshToken != "r" {
 		t.Fatalf("token not kept: %v", err)
 	}
-	if _, body := e.get(t, "/"); !strings.Contains(body, "Gmail") || !strings.Contains(body, "Reconnecter") {
+	if _, body := e.get(t, "/"); !strings.Contains(body, "me@gmail.com") || !strings.Contains(body, "Reconnecter") {
 		t.Fatal("account not listed")
 	}
 

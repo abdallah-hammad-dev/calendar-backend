@@ -9,11 +9,13 @@
 :root {
   --bg: #f6f6f4; --card: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e2e1dc;
   --accent: #2f5d8a; --accent-text: #ffffff; --ok-bg: #e7f3ea; --ok: #1f6b34; --err-bg: #fbeaea; --err: #9b2c2c;
+  --google: #1a73e8; --microsoft: #0f6cbd;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #161615; --card: #20201f; --text: #ecebe6; --muted: #a09f98; --line: #34342f;
     --accent: #6f9fd0; --accent-text: #0e1620; --ok-bg: #1b2e20; --ok: #8fd19e; --err-bg: #3a1e1e; --err: #f0a3a3;
+    --google: #8ab4f8; --microsoft: #6cb8f6;
   }
 }
 * { box-sizing: border-box; }
@@ -22,7 +24,9 @@ main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
 header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
 h1 { font-size: 22px; margin: 0; }
 h2 { font-size: 16px; margin: 0 0 12px; }
-h2.section { font-size: 18px; margin: 28px 0 12px; }
+h2.section { font-size: 18px; margin: 32px 0 12px; }
+main > h2.section:first-of-type { margin-top: 8px; }
+h3 { font-size: 16px; margin: 0; }
 .card h2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .card h2 .badge { margin-left: auto; }
 a { color: var(--accent); }
@@ -34,6 +38,11 @@ ol li { margin: 4px 0; }
 .badge.bad { background: var(--err-bg); border-color: transparent; color: var(--err); }
 a.badge { color: var(--accent); }
 .account-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.logo { flex: none; width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; font-weight: 700;
+  font-size: 17px; background: var(--bg); border: 1px solid var(--line); color: var(--muted); }
+.logo.google { color: var(--google); }
+.logo.microsoft { color: var(--microsoft); }
+.logo.ics { font-size: 11px; letter-spacing: .04em; }
 .hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
 dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; font-size: 14px; }
 dl.kv dt { color: var(--muted); }
@@ -42,28 +51,49 @@ fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 fieldset:disabled input, fieldset:disabled select, fieldset:disabled button { opacity: .5; cursor: not-allowed; }
 .card > details { margin-top: 12px; }
 .muted { color: var(--muted); font-size: 13px; }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 12px; }
 .notice, .error { border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; }
 .notice { background: var(--ok-bg); color: var(--ok); }
 .error { background: var(--err-bg); color: var(--err); }
-.account { border-top: 1px solid var(--line); padding: 12px 0; }
-.account:first-of-type { border-top: 0; padding-top: 0; }
+.account { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px 14px; padding: 16px 20px; }
+.account .who { min-width: 0; overflow-wrap: anywhere; }
 .account .name { font-weight: 600; }
+.account .actions { display: flex; gap: 8px; }
+.account .err, .account .confirm { grid-column: 2 / -1; }
 .account .err { color: var(--err); font-size: 13px; overflow-wrap: anywhere; }
-.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
-label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
-input[type=text], input[type=email], input[type=password], input[type=url], select {
-  width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit;
+.confirm { display: none; margin-top: 10px; padding: 14px 16px; border-radius: 8px; background: var(--err-bg); scroll-margin-top: 160px; }
+.confirm:target { display: block; }
+.confirm strong { display: block; margin-bottom: 6px; overflow-wrap: anywhere; }
+.add-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.add-head > div { flex: 1; min-width: 0; }
+.add-head .muted { margin: 2px 0 0; }
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+.fields label { margin-top: 0; }
+.fields .wide { grid-column: 1 / -1; }
+.opt { font-size: 12px; color: var(--muted); font-weight: 400; opacity: .8; }
+.opt::before { content: "· "; }
+@media (max-width: 560px) {
+  .fields { grid-template-columns: 1fr; }
+  .account { grid-template-columns: auto minmax(0, 1fr); }
+  .account .actions { grid-column: 2; margin-top: 8px; }
+  .account .err, .account .confirm { grid-column: 1 / -1; }
 }
-button { font: inherit; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 16px; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+input[type=text], input[type=email], input[type=password], input[type=url], select {
+  width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit;
+}
+button, a.button { display: inline-block; font: inherit; line-height: 1.5; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--card); color: var(--text); cursor: pointer; text-decoration: none; white-space: nowrap; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-button.danger { color: var(--err); }
+button.danger, a.button.danger { color: var(--err); }
 form.inline { display: inline; }
 details summary { cursor: pointer; color: var(--accent); font-size: 14px; }
 details[open] summary { margin-bottom: 6px; }
-.choice { display: flex; gap: 6px; align-items: center; color: var(--text); font-size: 14px; margin: 4px 0; }
+.choice { display: flex; gap: 8px; align-items: center; color: var(--text); font-size: 14px; margin: 6px 0; }
 .adds { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 16px; }
 .adds .card { margin-bottom: 0; }
+.confirm .row { margin-top: 10px; }
 code { font-size: 13px; overflow-wrap: anywhere; }
 </style>
 </head>
