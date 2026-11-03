@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,8 +54,9 @@ type Server struct {
 	Engine   *mirror.Engine
 	Store    *store.Store
 	Kinds    *accounts.Kinds
-	BaseURL  string // the page's public address, no trailing slash
-	User     string // the Davis user and password: the page's login
+	FromEnv  map[string]bool // kinds whose OAuth client the environment sets: shown, not changed, here
+	BaseURL  string          // the page's public address, no trailing slash
+	User     string          // the Davis user and password: the page's login
 	Password string
 	Log      *slog.Logger
 
@@ -104,6 +106,7 @@ func (s *Server) Handler(ctx context.Context) (http.Handler, error) {
 	mux.Handle("POST /accounts/{kind}/connect", s.auth(s.connect))
 	mux.Handle("GET "+CallbackPath, s.auth(s.callback))
 	mux.Handle("POST /accounts/{id}/remove", s.auth(s.remove))
+	mux.Handle("POST /settings/{kind}", s.auth(s.saveProvider))
 	mux.Handle("POST /sync", s.auth(func(w http.ResponseWriter, r *http.Request) {
 		s.Engine.Wake()
 		http.Redirect(w, r, "/?ok=sync", http.StatusSeeOther)
@@ -199,9 +202,24 @@ type page struct {
 	Me            string // my address on Davis
 	Accounts      []row
 	Collections   []davis.Calendar
-	Google        bool
-	Microsoft     bool
+	Google        provider
+	Microsoft     provider
 	CallbackURL   string
+}
+
+// provider is a kind's sign-in as the page shows it: set or not, from the environment or from here. Never its
+// secret, only whether one is kept.
+type provider struct {
+	Kind, Label string
+	EnvPrefix   string // GOOGLE, MICROSOFT
+	On          bool   // accounts of this kind can be added
+	FromEnv     bool
+	ClientID    string
+	Tenant      string
+	HasSecret   bool
+	Accounts    int // accounts of this kind: changing the client means signing them in again
+	BaseURL     string
+	CallbackURL string
 }
 
 type row struct {
@@ -217,12 +235,17 @@ var notices = map[string]string{
 	"reconnected": "Compte reconnecté.",
 	"removed":     "Compte retiré.",
 	"sync":        "Synchronisation lancée.",
+	"google-set":  "Connexion Google enregistrée : tu peux ajouter un compte Google.",
+	"google-set-reconnect": "Connexion Google enregistrée. Tes comptes Google ont été connectés avec l'ancien réglage : " +
+		"reconnecte-les (bouton « Reconnecter »).",
+	"microsoft-set": "Connexion Microsoft enregistrée : tu peux ajouter un compte Microsoft.",
+	"microsoft-set-reconnect": "Connexion Microsoft enregistrée. Tes comptes Microsoft ont été connectés avec l'ancien " +
+		"réglage : reconnecte-les (bouton « Reconnecter »).",
 }
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	p := page{Notice: notices[r.URL.Query().Get("ok")], Me: s.Engine.Me, Google: s.Kinds.Google != nil,
-		Microsoft: s.Kinds.Microsoft != nil, CallbackURL: s.BaseURL + CallbackPath}
+	p := page{Notice: notices[r.URL.Query().Get("ok")], Me: s.Engine.Me, CallbackURL: s.BaseURL + CallbackPath}
 	cols, err := s.collections(ctx)
 	if err != nil {
 		p.Error = "Davis ne répond pas : " + err.Error()
@@ -233,6 +256,13 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		names[c.Href] = c.DisplayName
 	}
 	list, err := s.Store.Accounts(ctx)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if p.Google, err = s.provider(ctx, "google", list); err == nil {
+		p.Microsoft, err = s.provider(ctx, "microsoft", list)
+	}
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -251,6 +281,82 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		p.Accounts = append(p.Accounts, rw)
 	}
 	s.render(w, http.StatusOK, "home", p)
+}
+
+func (s *Server) provider(ctx context.Context, kind string, list []store.Account) (provider, error) {
+	v := provider{Kind: kind, Label: kindLabel(kind), EnvPrefix: strings.ToUpper(kind), FromEnv: s.FromEnv[kind],
+		BaseURL: s.BaseURL, CallbackURL: s.BaseURL + CallbackPath}
+	for _, a := range list {
+		if a.Kind == kind {
+			v.Accounts++
+		}
+	}
+	cur := s.Kinds.Provider(kind)
+	v.On = cur != nil
+	if v.FromEnv {
+		if cur != nil {
+			v.ClientID, v.Tenant = cur.Config.ClientID, cur.Tenant
+		}
+		return v, nil
+	}
+	saved, err := s.Kinds.Saved(ctx, kind)
+	v.ClientID, v.Tenant, v.HasSecret = saved.ClientID, saved.Tenant, saved.ClientSecret != ""
+	return v, err
+}
+
+// saveProvider keeps the OAuth client typed for a kind and puts it in place at once. A blank secret keeps the one
+// kept; a kind the environment sets is left alone (it would win again at the next start).
+func (s *Server) saveProvider(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	kind := r.PathValue("kind")
+	if kind != "google" && kind != "microsoft" {
+		s.problem(w, "Connexion inconnue : "+kind+".")
+		return
+	}
+	if s.FromEnv[kind] {
+		s.problem(w, "La connexion "+kindLabel(kind)+" est réglée dans l'environnement du serveur ("+strings.ToUpper(kind)+
+			"_CLIENT_ID…, deploy/.env) : change-la là, puis redéploie.")
+		return
+	}
+	old, err := s.Kinds.Saved(ctx, kind)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	p := accounts.ProviderSettings{ClientID: strings.TrimSpace(r.PostFormValue("client_id")),
+		ClientSecret: strings.TrimSpace(r.PostFormValue("client_secret"))}
+	if kind == "microsoft" {
+		if p.Tenant = strings.ToLower(strings.TrimSpace(r.PostFormValue("tenant"))); p.Tenant == "" {
+			p.Tenant = "common"
+		}
+	}
+	if p.ClientSecret == "" {
+		p.ClientSecret = old.ClientSecret
+	}
+	if err := p.Check(kind); err != nil {
+		s.problem(w, err.Error())
+		return
+	}
+	// Accounts signed in through another client (or directory) can't refresh their tokens through this one.
+	cur := s.Kinds.Provider(kind)
+	moved := cur != nil && (cur.Config.ClientID != p.ClientID || kind == "microsoft" && cur.Tenant != p.Tenant)
+	if err := s.Kinds.Save(ctx, kind, p, s.BaseURL+CallbackPath); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.Log.Info("sign-in set on the accounts page", "kind", kind)
+	ok := kind + "-set"
+	if moved {
+		list, err := s.Store.Accounts(ctx)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if slices.ContainsFunc(list, func(a store.Account) bool { return a.Kind == kind }) {
+			ok += "-reconnect"
+		}
+	}
+	http.Redirect(w, r, "/?ok="+ok, http.StatusSeeOther)
 }
 
 // collections are mine that hold events, by name.

@@ -40,10 +40,11 @@
 </section>
 
 {{if .Collections}}
+<h2 class="section">Ajouter un compte</h2>
 <section class="adds">
-  {{if .Google}}
+  {{if .Google.On}}
   <form class="card" method="post" action="/accounts/google/connect">
-    <h2>Ajouter un compte Google</h2>
+    <h2>Google</h2>
     <label for="g-name">Nom</label>
     <input id="g-name" type="text" name="name" placeholder="Gmail">
     <label for="g-collection">Collection où vont ses événements</label>
@@ -51,11 +52,18 @@
       <option value="{{.Href}}">{{.DisplayName}}</option>{{end}}
     </select>
     <div class="row"><button type="submit" class="primary">Se connecter à Google</button></div>
+    <p class="muted">Gmail ou Google Workspace.</p>
   </form>
+  {{else}}
+  <div class="card">
+    <h2>Google</h2>
+    <p class="muted">Pas encore configuré : il faut l'ID client et le secret d'un projet Google Cloud, dans
+    <a href="#google">Connexion Google</a> plus bas.</p>
+  </div>
   {{end}}
-  {{if .Microsoft}}
+  {{if .Microsoft.On}}
   <form class="card" method="post" action="/accounts/microsoft/connect">
-    <h2>Ajouter un compte Microsoft</h2>
+    <h2>Microsoft</h2>
     <label for="m-name">Nom</label>
     <input id="m-name" type="text" name="name" placeholder="École">
     <label for="m-collection">Collection où vont ses événements</label>
@@ -63,11 +71,17 @@
       <option value="{{.Href}}">{{.DisplayName}}</option>{{end}}
     </select>
     <div class="row"><button type="submit" class="primary">Se connecter à Microsoft</button></div>
-    <p class="muted">Personnel (Outlook.com) ou d'une organisation (école, travail).</p>
+    <p class="muted">{{if eq .Microsoft.Tenant "" "common"}}Personnel (Outlook.com) ou d'une organisation (école, travail).{{else}}Les comptes de l'annuaire <code>{{.Microsoft.Tenant}}</code> seulement.{{end}}</p>
   </form>
+  {{else}}
+  <div class="card">
+    <h2>Microsoft</h2>
+    <p class="muted">Pas encore configuré : il faut l'ID et le secret d'une app Microsoft Entra, dans
+    <a href="#microsoft">Connexion Microsoft</a> plus bas.</p>
+  </div>
   {{end}}
   <form class="card" method="post" action="/accounts/ics">
-    <h2>Ajouter un calendrier publié (ICS)</h2>
+    <h2>Calendrier publié (ICS)</h2>
     <label for="i-name">Nom</label>
     <input id="i-name" type="text" name="name" required placeholder="Emploi du temps">
     <label for="i-address">Mon adresse sur ce compte</label>
@@ -87,11 +101,74 @@
 Obsidian), puis reviens ici.</p></div>
 {{end}}
 
+<h2 class="section">Réglages</h2>
 <section class="card">
-  <h2>Réglages</h2>
   <p class="muted">Tes invitations sont écrites pour <strong>{{.Me}}</strong>, l'adresse de ton utilisateur Davis.</p>
   <p class="muted">Adresse de retour à donner à Google et à Microsoft (« URI de redirection ») :<br><code>{{.CallbackURL}}</code></p>
-  {{if not .Google}}<p class="muted">Google n'est pas configuré (GOOGLE_CLIENT_ID et GOOGLE_CLIENT_SECRET).</p>{{end}}
-  {{if not .Microsoft}}<p class="muted">Microsoft n'est pas configuré (MICROSOFT_CLIENT_ID et MICROSOFT_CLIENT_SECRET).</p>{{end}}
+</section>
+<section class="adds">
+  {{template "provider" .Google}}
+  {{template "provider" .Microsoft}}
 </section>
 {{template "foot"}}{{end}}
+
+{{define "provider"}}
+<div class="card" id="{{.Kind}}">
+  <h2>Connexion {{.Label}}</h2>
+  {{if .FromEnv}}
+  <p class="muted">Réglée dans l'environnement du serveur (<code>{{.EnvPrefix}}_CLIENT_ID</code>…, <code>deploy/.env</code>) :
+  pour la changer, modifie ce fichier puis redéploie. Vide ces valeurs pour la régler ici.</p>
+  <p class="muted">ID client : <code>{{.ClientID}}</code>{{if .Tenant}}<br>Annuaire : <code>{{.Tenant}}</code>{{end}}</p>
+  {{else}}
+  <p class="muted">{{if .On}}Configurée{{if .HasSecret}}, secret enregistré{{end}}.{{else}}Pas encore configurée.{{end}}</p>
+  <form method="post" action="/settings/{{.Kind}}">
+    <label for="{{.Kind}}-client-id">{{if eq .Kind "microsoft"}}ID d'application (client){{else}}ID client{{end}}</label>
+    <input id="{{.Kind}}-client-id" type="text" name="client_id" value="{{.ClientID}}" required autocomplete="off"
+      autocapitalize="none" spellcheck="false">
+    <label for="{{.Kind}}-secret">{{if eq .Kind "microsoft"}}Secret client (sa Valeur){{else}}Code secret du client{{end}}</label>
+    <input id="{{.Kind}}-secret" type="text" name="client_secret"{{if not .HasSecret}} required{{end}} autocomplete="off"
+      autocapitalize="none" spellcheck="false"{{if .HasSecret}} placeholder="Enregistré : laisse vide pour le garder"{{end}}>
+    {{if eq .Kind "microsoft"}}
+    <label for="microsoft-tenant">Annuaire (tenant)</label>
+    <input id="microsoft-tenant" type="text" name="tenant" value="{{.Tenant}}" placeholder="common" autocomplete="off"
+      autocapitalize="none" spellcheck="false">
+    <p class="muted"><code>common</code> : comptes personnels et de toute organisation. L'ID d'un annuaire : les
+    comptes de cette organisation seulement (une app inscrite dans l'annuaire de ton école).</p>
+    {{end}}
+    {{if and .On .Accounts}}<p class="muted">Changer d'ID client oblige à reconnecter {{if eq .Accounts 1}}ton compte
+    {{.Label}}{{else}}tes {{.Accounts}} comptes {{.Label}}{{end}}.</p>{{end}}
+    <div class="row"><button type="submit" class="primary">Enregistrer</button></div>
+    <p class="muted">Le secret ne s'affiche plus une fois enregistré.</p>
+  </form>
+  {{end}}
+  <details>
+    <summary>Où trouver ces valeurs</summary>
+    {{if eq .Kind "google"}}
+    <ol>
+      <li><a href="https://console.cloud.google.com/projectcreate">Un projet Google Cloud</a>, avec
+        « Google Calendar API » activée (Bibliothèque).</li>
+      <li>Google Auth Platform : audience <strong>Externe</strong>. Branding : page d'accueil <code>{{.BaseURL}}</code>,
+        règles de confidentialité <code>{{.BaseURL}}/privacy</code>, le domaine de cette page en domaine autorisé,
+        pas de logo (il demanderait une validation par Google).</li>
+      <li>Accès aux données : <code>openid</code>, <code>…/auth/userinfo.email</code>,
+        <code>https://www.googleapis.com/auth/calendar.events</code>.</li>
+      <li>Audience : <strong>Publier l'application</strong>. Laissée « En test », la connexion expire au bout de 7 jours.</li>
+      <li>Clients, Créer un client, <strong>Application Web</strong>, URI de redirection <code>{{.CallbackURL}}</code> :
+        l'ID client et le code secret, montré une seule fois.</li>
+    </ol>
+    {{else}}
+    <ol>
+      <li><a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade">Inscriptions
+        d'applications</a>, Nouvelle inscription, URI de redirection <strong>Web</strong> <code>{{.CallbackURL}}</code>.
+        Un compte personnel n'a plus d'annuaire gratuit ; avec un compte d'école, choisis « cet annuaire uniquement ».</li>
+      <li>Vue d'ensemble : l'ID d'application (client), et l'ID de l'annuaire pour une app réservée à une organisation.</li>
+      <li>Certificats et secrets, Nouveau secret client : sa <strong>Valeur</strong>, pas son ID, montrée une seule fois.
+        Note sa date d'expiration : il faudra en mettre un nouveau ici avant.</li>
+      <li>Autorisations des API, Microsoft Graph, autorisations déléguées : <code>Calendars.ReadWrite</code>,
+        <code>offline_access</code>, <code>openid</code>, <code>email</code>.</li>
+    </ol>
+    <p class="muted">Une école peut exiger l'accord d'un administrateur (« Approval required ») : la connexion le dira.</p>
+    {{end}}
+  </details>
+</div>
+{{end}}

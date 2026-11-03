@@ -8,16 +8,24 @@ redirection » à donner à Google et à Microsoft est `BASE_URL/oauth/callback`
 Pour essayer en local, ajoute aussi `http://localhost:8080/oauth/callback` (les deux fournisseurs acceptent
 `localhost` en HTTP).
 
-Les valeurs obtenues vont dans `backend.env` (ou `deploy/.env`, puis `./deploy.sh`), jamais dans git :
+Les valeurs obtenues vont, au choix (jamais dans git) :
+
+- **sur la page des comptes**, « Réglages », « Connexion Google / Microsoft » : ID, secret (et annuaire pour
+  Microsoft), pris en compte tout de suite, gardés dans la base du backend. Le secret ne s'affiche plus ensuite ;
+  le laisser vide garde celui enregistré. Chaque carte rappelle où trouver ces valeurs ;
+- **dans l'environnement** : `backend.env`, ou `deploy/.env` puis `./deploy.sh`. Il l'emporte : la page montre
+  alors le réglage sans pouvoir le changer. Vider ces valeurs (et redéployer) rend la main à la page.
 
 ```
 GOOGLE_CLIENT_ID=…
 GOOGLE_CLIENT_SECRET=…
 MICROSOFT_CLIENT_ID=…
 MICROSOFT_CLIENT_SECRET=…
+MICROSOFT_TENANT=common
 ```
 
-Puis relance le backend : la page propose alors « Ajouter un compte Google / Microsoft ».
+La page propose alors « Se connecter à Google / Microsoft ». Changer d'ID client (ou d'annuaire) oblige à
+reconnecter les comptes déjà ajoutés : la page le dit.
 
 N'ajoute pas aussi ces comptes Google ou Microsoft sur l'iPhone : tout apparaîtrait deux fois.
 

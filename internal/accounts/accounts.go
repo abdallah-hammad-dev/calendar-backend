@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	"golang.org/x/oauth2"
 
@@ -21,12 +22,16 @@ import (
 
 type Kinds struct {
 	Store     *store.Store
-	Google    *oauth.Provider // nil: not set up (no client id)
+	Google    *oauth.Provider // nil: not set up (no client id). Set here before use, then through SetProvider.
 	Microsoft *oauth.Provider
+
+	mu sync.RWMutex // the accounts page sets a sign-in while passes read it
 }
 
 // Provider is the sign-in of a kind, nil when it isn't set up or the kind isn't signed into.
 func (k *Kinds) Provider(kind string) *oauth.Provider {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
 	switch kind {
 	case "google":
 		return k.Google
@@ -34,6 +39,18 @@ func (k *Kinds) Provider(kind string) *oauth.Provider {
 		return k.Microsoft
 	}
 	return nil
+}
+
+// SetProvider puts a kind's sign-in in place (nil: none). The next pass signs its accounts in with it.
+func (k *Kinds) SetProvider(kind string, p *oauth.Provider) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	switch kind {
+	case "google":
+		k.Google = p
+	case "microsoft":
+		k.Microsoft = p
+	}
 }
 
 // FeedConfig is an ICS feed account's config.

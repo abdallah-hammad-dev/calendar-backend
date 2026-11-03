@@ -19,6 +19,7 @@ import (
 // Provider is one kind of account that is signed into.
 type Provider struct {
 	Kind   string // the account kind: "google", "microsoft"
+	Tenant string // Microsoft: the directory signed into ("common", an ID or a domain)
 	Config *oauth2.Config
 	extra  []oauth2.AuthCodeOption
 }
@@ -39,7 +40,8 @@ func Google(clientID, clientSecret, redirectURL string) *Provider {
 // gives the refresh token.
 func Microsoft(clientID, clientSecret, tenant, redirectURL string) *Provider {
 	return &Provider{
-		Kind: "microsoft",
+		Kind:   "microsoft",
+		Tenant: tenant,
 		Config: &oauth2.Config{ClientID: clientID, ClientSecret: clientSecret, RedirectURL: redirectURL,
 			Endpoint: endpoints.AzureAD(tenant),
 			Scopes:   []string{"openid", "email", "offline_access", "https://graph.microsoft.com/Calendars.ReadWrite"}},

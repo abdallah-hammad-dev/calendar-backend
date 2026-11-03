@@ -61,8 +61,11 @@ backend must write. This repo is private.
 - `internal/oauth` — sign-in with PKCE, tokens refreshed and saved back (Microsoft rotates refresh tokens),
   `SignInAgain(err)`.
 - `internal/accounts` — each kind: its adapter (signed in from the account's config), its address after sign-in.
+  `providers.go`: the Google / Microsoft OAuth clients, from the environment (wins) or from the accounts page
+  (`settings` row `oauth_client_<kind>`), swapped at run time under a lock.
 - `internal/htmltext` — HTML descriptions to plain text, keeping link targets.
-- `internal/web` — the accounts page (templates embedded, French): login, add / sign in again / remove, sync now.
+- `internal/web` — the accounts page (templates embedded, French): login, add / sign in again / remove, sync now,
+  the OAuth clients (`/settings/{kind}`), the public `/privacy` page Google asks for.
 - `internal/mirror` — `Base` (spec §5.2's rules common to every account), `Merge` (keeps what clients add), the
   `Engine` (pass = each collection accounts write into read once, then each source; answers in flight; one copy
   of a meeting two accounts are invited to). Accounts write into a collection the user chose, shared with their

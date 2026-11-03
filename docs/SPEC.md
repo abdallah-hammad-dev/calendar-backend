@@ -215,6 +215,12 @@ The provider then notifies the organizer from the invited address, and the next 
 - One-time setup per provider, done by me: a Google Cloud project (Calendar API on, OAuth consent "External",
   published), an Entra app registration (personal + any organization accounts). The page shows the redirect URI to
   paste. `http://localhost` redirect URIs work for local development.
+- **The OAuth clients are entered on the page or in the environment** (2026-11-03, the user: Google, Microsoft and
+  ICS always on the page, with fields for the IDs and secrets, "tout en gardant la capacité de deploy avec l'env").
+  The environment wins (`GOOGLE_CLIENT_ID`…, `deploy/.env`): the page shows that client, read-only. Otherwise what is
+  typed there is kept in `settings` (one JSON row per kind) and put in place at once (`Kinds.SetProvider`; the
+  next pass uses it). The secret is never shown back; a blank one keeps it. A new client ID or directory says to
+  sign the kind's accounts in again. Shapes are checked (a Microsoft secret's ID instead of its value is refused).
 
 ## 8. Deployment
 

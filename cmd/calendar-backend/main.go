@@ -25,7 +25,6 @@ import (
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/config"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/davis"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/mirror"
-	"github.com/abdallah-hammad-dev/calendar-backend/internal/oauth"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/store"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/web"
 )
@@ -90,12 +89,13 @@ func run(ctx context.Context, envFile, cmd string, args []string) error {
 		return fmt.Errorf("Davis user %q has no email: set one in the Davis dashboard (it is the address invitations are shown for)", cfg.DavisUser)
 	}
 	kinds := &accounts.Kinds{Store: st}
-	callback := cfg.BaseURL + web.CallbackPath
-	if cfg.GoogleClientID != "" {
-		kinds.Google = oauth.Google(cfg.GoogleClientID, cfg.GoogleClientSecret, callback)
-	}
-	if cfg.MicrosoftClientID != "" {
-		kinds.Microsoft = oauth.Microsoft(cfg.MicrosoftClientID, cfg.MicrosoftClientSecret, cfg.MicrosoftTenant, callback)
+	// The environment's OAuth clients win; a kind it leaves empty takes the one entered on the accounts page.
+	fromEnv, err := kinds.Setup(ctx, map[string]accounts.ProviderSettings{
+		"google":    {ClientID: cfg.GoogleClientID, ClientSecret: cfg.GoogleClientSecret},
+		"microsoft": {ClientID: cfg.MicrosoftClientID, ClientSecret: cfg.MicrosoftClientSecret, Tenant: cfg.MicrosoftTenant},
+	}, cfg.BaseURL+web.CallbackPath)
+	if err != nil {
+		return err
 	}
 	e := &mirror.Engine{Store: st, Davis: dc, Me: p.Email(), Home: p.Home, Vault: cfg.Vault, Loc: cfg.Location,
 		Adapter: kinds.Adapter, Log: log}
@@ -104,12 +104,13 @@ func run(ctx context.Context, envFile, cmd string, args []string) error {
 	case "run":
 		log.Info("running", "davis", cfg.DavisURL, "user", cfg.DavisUser, "me", e.Me,
 			"davis_every", cfg.DavisEvery, "source_every", cfg.SourceEvery, "page", cfg.BaseURL,
-			"google", kinds.Google != nil, "microsoft", kinds.Microsoft != nil)
+			"google", kinds.Provider("google") != nil, "google_from_env", fromEnv["google"],
+			"microsoft", kinds.Provider("microsoft") != nil, "microsoft_from_env", fromEnv["microsoft"])
 		if cfg.Listen == "" {
 			return e.Run(ctx, cfg.DavisEvery, cfg.SourceEvery)
 		}
-		page := &web.Server{Engine: e, Store: st, Kinds: kinds, BaseURL: cfg.BaseURL, User: cfg.DavisUser,
-			Password: cfg.DavisPassword, Log: log}
+		page := &web.Server{Engine: e, Store: st, Kinds: kinds, FromEnv: fromEnv, BaseURL: cfg.BaseURL,
+			User: cfg.DavisUser, Password: cfg.DavisPassword, Log: log}
 		h, err := page.Handler(ctx)
 		if err != nil {
 			return err

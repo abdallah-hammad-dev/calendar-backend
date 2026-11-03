@@ -49,7 +49,7 @@ type env struct {
 	server *Server
 }
 
-func setup(t *testing.T, dc *davis.Client, home, me string, google *oauth.Provider) env {
+func setup(t *testing.T, dc *davis.Client, home, me string, google *oauth.Provider, opts ...func(*Server)) env {
 	st, err := store.Open(filepath.Join(t.TempDir(), "backend.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +60,9 @@ func setup(t *testing.T, dc *davis.Client, home, me string, google *oauth.Provid
 	paris, _ := time.LoadLocation("Europe/Paris")
 	e := &mirror.Engine{Store: st, Davis: dc, Me: me, Home: home, Loc: paris, Adapter: kinds.Adapter, Log: log}
 	s := &Server{Engine: e, Store: st, Kinds: kinds, BaseURL: "http://cal.test", User: "abd", Password: "secret", Log: log}
+	for _, o := range opts {
+		o(s)
+	}
 	h, err := s.Handler(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -187,6 +190,88 @@ func TestFeedForm(t *testing.T) {
 		if resp := e.post(t, "/accounts/ics", f); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%v: %s", f, resp.Status)
 		}
+	}
+}
+
+// Sign-ins set on the page: in place at once, shown without their secret; a blank secret keeps the one kept; a new
+// client says to sign the kind's accounts in again; a kind the environment sets is shown, not changed.
+func TestProviderSettings(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t, offline(t), "/dav/calendars/abd/", "abd@bench.test", nil)
+	e.login(t)
+	if _, body := e.get(t, "/"); !strings.Contains(body, `action="/settings/google"`) ||
+		!strings.Contains(body, `action="/settings/microsoft"`) || !strings.Contains(body, "Pas encore configurée") {
+		t.Fatal("no settings forms")
+	}
+	settle := func(kind string, form url.Values, want string) {
+		t.Helper()
+		resp := e.post(t, "/settings/"+kind, form)
+		if got := resp.Header.Get("Location"); resp.StatusCode != http.StatusSeeOther || got != want {
+			t.Fatalf("%s %v: %s %s, want %s", kind, form, resp.Status, got, want)
+		}
+	}
+
+	const id = "123456789012-abcdef0123456789.apps.googleusercontent.com"
+	if resp := e.post(t, "/settings/google", url.Values{"client_id": {"my-project"}, "client_secret": {"s"}}); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad client id: %s", resp.Status)
+	}
+	if e.server.Kinds.Provider("google") != nil {
+		t.Fatal("set from a refused form")
+	}
+	settle("google", url.Values{"client_id": {id}, "client_secret": {"GOCSPX-first"}}, "/?ok=google-set")
+	if g := e.server.Kinds.Provider("google"); g == nil || g.Config.ClientID != id || g.Config.ClientSecret != "GOCSPX-first" ||
+		g.Config.RedirectURL != "http://cal.test"+CallbackPath {
+		t.Fatalf("google: %+v", g)
+	}
+	_, body := e.get(t, "/")
+	if strings.Contains(body, "GOCSPX-first") {
+		t.Fatal("the secret is on the page")
+	}
+	if !strings.Contains(body, id) || !strings.Contains(body, "secret enregistré") {
+		t.Fatal("the client isn't shown")
+	}
+
+	// An account signed in through this client: another client means signing it in again.
+	if _, err := e.store.AddAccount(ctx, store.Account{Kind: "google", Name: "Gmail", Address: "me@gmail.com",
+		Collection: "/dav/calendars/abd/c/", Config: "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	const other = "999999999999-zzzz.apps.googleusercontent.com"
+	settle("google", url.Values{"client_id": {other}, "client_secret": {""}}, "/?ok=google-set-reconnect")
+	if g := e.server.Kinds.Provider("google"); g.Config.ClientID != other || g.Config.ClientSecret != "GOCSPX-first" {
+		t.Fatalf("blank secret: %+v", g.Config)
+	}
+	settle("google", url.Values{"client_id": {other}, "client_secret": {"GOCSPX-second"}}, "/?ok=google-set")
+	if g := e.server.Kinds.Provider("google"); g.Config.ClientSecret != "GOCSPX-second" {
+		t.Fatal("new secret not taken")
+	}
+
+	// Microsoft: its secret's ID instead of its value is refused; the directory is kept as typed, in lower case.
+	const app = "11111111-2222-4333-8444-555555555555"
+	if resp := e.post(t, "/settings/microsoft", url.Values{"client_id": {app},
+		"client_secret": {"66666666-7777-4888-9999-aaaaaaaaaaaa"}}); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("secret ID taken as the secret: %s", resp.Status)
+	}
+	settle("microsoft", url.Values{"client_id": {app}, "client_secret": {"abc8Q~value"}, "tenant": {"School.example"}}, "/?ok=microsoft-set")
+	if m := e.server.Kinds.Provider("microsoft"); m == nil || m.Tenant != "school.example" || !strings.Contains(m.Config.Endpoint.AuthURL, "/school.example/") {
+		t.Fatalf("microsoft: %+v", m)
+	}
+	if saved, _ := e.server.Kinds.Saved(ctx, "microsoft"); saved.ClientSecret != "abc8Q~value" {
+		t.Fatal("not kept")
+	}
+
+	// Set by the environment: shown, read-only.
+	g := oauth.Google(id, "env-secret", "http://cal.test"+CallbackPath)
+	envd := setup(t, offline(t), "/dav/calendars/abd/", "abd@bench.test", g,
+		func(s *Server) { s.FromEnv = map[string]bool{"google": true} })
+	envd.login(t)
+	if resp := envd.post(t, "/settings/google", url.Values{"client_id": {other}, "client_secret": {"x"}}); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("changed what the environment sets: %s", resp.Status)
+	}
+	_, body = envd.get(t, "/")
+	if strings.Contains(body, `action="/settings/google"`) || !strings.Contains(body, "deploy/.env") || !strings.Contains(body, id) ||
+		strings.Contains(body, "env-secret") || !strings.Contains(body, `action="/settings/microsoft"`) {
+		t.Fatal("environment's sign-in not shown as such")
 	}
 }
 
