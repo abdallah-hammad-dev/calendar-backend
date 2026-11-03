@@ -2,7 +2,7 @@
 <header>
   <h1>Comptes</h1>
   <div class="row">
-    <form class="inline" method="post" action="/sync"><button type="submit">Synchroniser maintenant</button></form>
+    <form class="inline" method="post" action="/sync"><button type="submit">Synchroniser</button></form>
     <form class="inline" method="post" action="/logout"><button type="submit">Se déconnecter</button></form>
   </div>
 </header>
@@ -13,9 +13,13 @@
   <h2>Mes comptes</h2>
   {{range .Accounts}}
   <div class="account">
-    <div class="name">{{.Name}} <span class="muted">· {{kind .Kind}} · {{.Address}}</span></div>
-    <div class="muted">Dans « {{.CollectionName}} » · dernière synchro : {{.LastSyncText}}</div>
-    {{if .LastError}}<div class="err">{{if .SignInOver}}La connexion à ce compte a expiré : reconnecte-le.{{else}}{{.LastError}}{{end}}</div>{{end}}
+    <div class="account-head">
+      <span class="name">{{.Name}}</span>
+      <span class="badge">{{kind .Kind}}</span>
+      {{if .LastError}}<span class="badge bad">Erreur</span>{{end}}
+    </div>
+    <div class="muted">{{if ne .Name .Address}}{{.Address}} · {{end}}{{.CollectionName}} · synchro {{.LastSyncText}}</div>
+    {{if .LastError}}<div class="err">{{if .SignInOver}}Connexion expirée : reconnecte ce compte.{{else}}{{.LastError}}{{end}}</div>{{end}}
     <div class="row">
       {{if .SignIn}}
       <form class="inline" method="post" action="/accounts/{{.Kind}}/connect">
@@ -26,85 +30,49 @@
       <details>
         <summary>Retirer</summary>
         <form method="post" action="/accounts/{{.ID}}/remove">
-          <label class="choice"><input type="radio" name="events" value="delete" required> Supprimer ses événements de Davis</label>
-          <label class="choice"><input type="radio" name="events" value="keep"> Les garder tels quels (plus mis à jour)</label>
+          <label class="choice"><input type="radio" name="events" value="delete" required> Supprimer ses événements</label>
+          <label class="choice"><input type="radio" name="events" value="keep"> Les garder (plus mis à jour)</label>
           <button type="submit" class="danger">Retirer {{.Name}}</button>
         </form>
       </details>
     </div>
   </div>
   {{else}}
-  <p class="muted">Aucun compte pour l'instant. Ajoute-en un ci-dessous : ses événements et ses invitations arriveront dans
-  la collection choisie, et tes réponses partiront de son adresse.</p>
+  <p class="muted">Aucun compte.</p>
   {{end}}
 </section>
 
 {{if .Collections}}
 <h2 class="section">Ajouter un compte</h2>
 <section class="adds">
-  {{if .Google.On}}
-  <form class="card" method="post" action="/accounts/google/connect">
-    <h2>Google</h2>
-    <label for="g-name">Nom</label>
-    <input id="g-name" type="text" name="name" placeholder="Gmail">
-    <label for="g-collection">Collection où vont ses événements</label>
-    <select id="g-collection" name="collection" required>{{range $.Collections}}
-      <option value="{{.Href}}">{{.DisplayName}}</option>{{end}}
-    </select>
-    <div class="row"><button type="submit" class="primary">Se connecter à Google</button></div>
-    <p class="muted">Gmail ou Google Workspace.</p>
-  </form>
-  {{else}}
-  <div class="card">
-    <h2>Google</h2>
-    <p class="muted">Pas encore configuré : il faut l'ID client et le secret d'un projet Google Cloud, dans
-    <a href="#google">Connexion Google</a> plus bas.</p>
-  </div>
-  {{end}}
-  {{if .Microsoft.On}}
-  <form class="card" method="post" action="/accounts/microsoft/connect">
-    <h2>Microsoft</h2>
-    <label for="m-name">Nom</label>
-    <input id="m-name" type="text" name="name" placeholder="École">
-    <label for="m-collection">Collection où vont ses événements</label>
-    <select id="m-collection" name="collection" required>{{range $.Collections}}
-      <option value="{{.Href}}">{{.DisplayName}}</option>{{end}}
-    </select>
-    <div class="row"><button type="submit" class="primary">Se connecter à Microsoft</button></div>
-    <p class="muted">{{if eq .Microsoft.Tenant "" "common"}}Personnel (Outlook.com) ou d'une organisation (école, travail).{{else}}Les comptes de l'annuaire <code>{{.Microsoft.Tenant}}</code> seulement.{{end}}</p>
-  </form>
-  {{else}}
-  <div class="card">
-    <h2>Microsoft</h2>
-    <p class="muted">Pas encore configuré : il faut l'ID et le secret d'une app Microsoft Entra, dans
-    <a href="#microsoft">Connexion Microsoft</a> plus bas.</p>
-  </div>
-  {{end}}
+  {{template "add" (card .Google .Collections)}}
+  {{template "add" (card .Microsoft .Collections)}}
   <form class="card" method="post" action="/accounts/ics">
-    <h2>Calendrier publié (ICS)</h2>
+    <h2>Calendrier publié <span class="badge">ICS</span></h2>
     <label for="i-name">Nom</label>
     <input id="i-name" type="text" name="name" required placeholder="Emploi du temps">
     <label for="i-address">Mon adresse sur ce compte</label>
     <input id="i-address" type="email" name="address" required placeholder="moi@ecole.fr">
     <label for="i-url">Lien du calendrier</label>
     <input id="i-url" type="url" name="url" required placeholder="https://…/calendar.ics">
-    <label for="i-collection">Collection où vont ses événements</label>
-    <select id="i-collection" name="collection" required>{{range $.Collections}}
+    <label for="i-collection">Collection</label>
+    <select id="i-collection" name="collection" required>{{range .Collections}}
       <option value="{{.Href}}">{{.DisplayName}}</option>{{end}}
     </select>
     <div class="row"><button type="submit" class="primary">Ajouter</button></div>
-    <p class="muted">Lecture seule : tes réponses restent sur Davis, l'organisateur n'est pas prévenu.</p>
+    <p class="muted">Lecture seule : tes réponses ne partent pas.</p>
   </form>
 </section>
 {{else if not .Error}}
-<div class="card"><p>Aucune de tes collections Davis ne contient d'événements : crée-en une (sur l'iPhone ou dans
-Obsidian), puis reviens ici.</p></div>
+<div class="card"><p class="muted">Aucune collection d'événements dans Davis : crée-en une (iPhone ou Obsidian).</p></div>
 {{end}}
 
-<h2 class="section">Réglages</h2>
+<h2 class="section">Connexions</h2>
 <section class="card">
-  <p class="muted">Tes invitations sont écrites pour <strong>{{.Me}}</strong>, l'adresse de ton utilisateur Davis.</p>
-  <p class="muted">Adresse de retour à donner à Google et à Microsoft (« URI de redirection ») :<br><code>{{.CallbackURL}}</code></p>
+  <dl class="kv">
+    <dt>URI de redirection</dt><dd><code>{{.CallbackURL}}</code></dd>
+    <dt>Mon adresse Davis</dt><dd>{{.Me}}</dd>
+  </dl>
 </section>
 <section class="adds">
   {{template "provider" .Google}}
@@ -112,62 +80,69 @@ Obsidian), puis reviens ici.</p></div>
 </section>
 {{template "foot"}}{{end}}
 
+{{/* A Google or Microsoft account to add: greyed out until its connection is set. */}}
+{{define "add"}}
+<form class="card" method="post" action="/accounts/{{.P.Kind}}/connect">
+  <h2>{{.P.Label}}{{if not .P.On}} <a class="badge" href="#{{.P.Kind}}">À configurer</a>{{end}}</h2>
+  <fieldset{{if not .P.On}} disabled{{end}}>
+    <label for="{{.P.Kind}}-name">Nom</label>
+    <input id="{{.P.Kind}}-name" type="text" name="name" placeholder="{{if eq .P.Kind "google"}}Gmail{{else}}École{{end}}">
+    <label for="{{.P.Kind}}-collection">Collection</label>
+    <select id="{{.P.Kind}}-collection" name="collection" required>{{range .Collections}}
+      <option value="{{.Href}}">{{.DisplayName}}</option>{{end}}
+    </select>
+    <div class="row"><button type="submit" class="primary">Se connecter</button></div>
+  </fieldset>
+</form>
+{{end}}
+
+{{/* A sign-in's OAuth client: editable here, or greyed out when the environment sets it. Never the secret. */}}
 {{define "provider"}}
 <div class="card" id="{{.Kind}}">
-  <h2>Connexion {{.Label}}</h2>
-  {{if .FromEnv}}
-  <p class="muted">Réglée dans l'environnement du serveur (<code>{{.EnvPrefix}}_CLIENT_ID</code>…, <code>deploy/.env</code>) :
-  pour la changer, modifie ce fichier puis redéploie. Vide ces valeurs pour la régler ici.</p>
-  <p class="muted">ID client : <code>{{.ClientID}}</code>{{if .Tenant}}<br>Annuaire : <code>{{.Tenant}}</code>{{end}}</p>
-  {{else}}
-  <p class="muted">{{if .On}}Configurée{{if .HasSecret}}, secret enregistré{{end}}.{{else}}Pas encore configurée.{{end}}</p>
-  <form method="post" action="/settings/{{.Kind}}">
-    <label for="{{.Kind}}-client-id">{{if eq .Kind "microsoft"}}ID d'application (client){{else}}ID client{{end}}</label>
+  <h2>{{.Label}}
+    {{if .FromEnv}}<span class="badge">deploy/.env</span>{{else if .On}}<span class="badge ok">Configurée</span>{{else}}<span class="badge">Non configurée</span>{{end}}
+  </h2>
+  {{if .FromEnv}}<fieldset disabled>{{else}}<form method="post" action="/settings/{{.Kind}}">{{end}}
+    <label for="{{.Kind}}-client-id">ID {{if eq .Kind "microsoft"}}d'application{{else}}client{{end}}</label>
     <input id="{{.Kind}}-client-id" type="text" name="client_id" value="{{.ClientID}}" required autocomplete="off"
       autocapitalize="none" spellcheck="false">
-    <label for="{{.Kind}}-secret">{{if eq .Kind "microsoft"}}Secret client (sa Valeur){{else}}Code secret du client{{end}}</label>
-    <input id="{{.Kind}}-secret" type="text" name="client_secret"{{if not .HasSecret}} required{{end}} autocomplete="off"
-      autocapitalize="none" spellcheck="false"{{if .HasSecret}} placeholder="Enregistré : laisse vide pour le garder"{{end}}>
+    <label for="{{.Kind}}-secret">Secret{{if eq .Kind "microsoft"}} (Value){{end}}</label>
+    <input id="{{.Kind}}-secret" type="text" name="client_secret" autocomplete="off" autocapitalize="none" spellcheck="false"
+      {{if .FromEnv}}placeholder="••••••••••••"{{else if .HasSecret}}placeholder="Enregistré (vide = inchangé)"{{else}}required{{end}}>
     {{if eq .Kind "microsoft"}}
-    <label for="microsoft-tenant">Annuaire (tenant)</label>
+    <label for="microsoft-tenant">Annuaire</label>
     <input id="microsoft-tenant" type="text" name="tenant" value="{{.Tenant}}" placeholder="common" autocomplete="off"
       autocapitalize="none" spellcheck="false">
-    <p class="muted"><code>common</code> : comptes personnels et de toute organisation. L'ID d'un annuaire : les
-    comptes de cette organisation seulement (une app inscrite dans l'annuaire de ton école).</p>
+    {{if not .FromEnv}}<p class="hint">common : tout compte. ID d'annuaire : une seule organisation.</p>{{end}}
     {{end}}
-    {{if and .On .Accounts}}<p class="muted">Changer d'ID client oblige à reconnecter {{if eq .Accounts 1}}ton compte
-    {{.Label}}{{else}}tes {{.Accounts}} comptes {{.Label}}{{end}}.</p>{{end}}
+  {{if .FromEnv}}
+  </fieldset>
+  <p class="hint">Défini dans <code>deploy/.env</code> : modifie-le là, puis redéploie.</p>
+  {{else}}
+    {{if and .On .Accounts}}<p class="hint">Un autre ID oblige à reconnecter tes comptes {{.Label}}.</p>{{end}}
     <div class="row"><button type="submit" class="primary">Enregistrer</button></div>
-    <p class="muted">Le secret ne s'affiche plus une fois enregistré.</p>
   </form>
   {{end}}
   <details>
-    <summary>Où trouver ces valeurs</summary>
+    <summary>Comment obtenir ces valeurs</summary>
     {{if eq .Kind "google"}}
     <ol>
-      <li><a href="https://console.cloud.google.com/projectcreate">Un projet Google Cloud</a>, avec
-        « Google Calendar API » activée (Bibliothèque).</li>
-      <li>Google Auth Platform : audience <strong>Externe</strong>. Branding : page d'accueil <code>{{.BaseURL}}</code>,
-        règles de confidentialité <code>{{.BaseURL}}/privacy</code>, le domaine de cette page en domaine autorisé,
-        pas de logo (il demanderait une validation par Google).</li>
-      <li>Accès aux données : <code>openid</code>, <code>…/auth/userinfo.email</code>,
-        <code>https://www.googleapis.com/auth/calendar.events</code>.</li>
-      <li>Audience : <strong>Publier l'application</strong>. Laissée « En test », la connexion expire au bout de 7 jours.</li>
-      <li>Clients, Créer un client, <strong>Application Web</strong>, URI de redirection <code>{{.CallbackURL}}</code> :
-        l'ID client et le code secret, montré une seule fois.</li>
+      <li><a href="https://console.cloud.google.com/projectcreate">Projet Google Cloud</a>, Google Calendar API activée.</li>
+      <li>Google Auth Platform : audience Externe. Branding : accueil <code>{{.BaseURL}}</code>, confidentialité
+        <code>{{.BaseURL}}/privacy</code>, pas de logo.</li>
+      <li>Accès aux données : <code>openid</code>, <code>userinfo.email</code>, <code>calendar.events</code>.</li>
+      <li>Audience → Publier l'application.</li>
+      <li>Clients → Application Web, avec l'URI de redirection ci-dessus.</li>
     </ol>
     {{else}}
     <ol>
-      <li><a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade">Inscriptions
-        d'applications</a>, Nouvelle inscription, URI de redirection <strong>Web</strong> <code>{{.CallbackURL}}</code>.
-        Un compte personnel n'a plus d'annuaire gratuit ; avec un compte d'école, choisis « cet annuaire uniquement ».</li>
-      <li>Vue d'ensemble : l'ID d'application (client), et l'ID de l'annuaire pour une app réservée à une organisation.</li>
-      <li>Certificats et secrets, Nouveau secret client : sa <strong>Valeur</strong>, pas son ID, montrée une seule fois.
-        Note sa date d'expiration : il faudra en mettre un nouveau ici avant.</li>
-      <li>Autorisations des API, Microsoft Graph, autorisations déléguées : <code>Calendars.ReadWrite</code>,
+      <li><a href="https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade">Entra</a> →
+        Nouvelle inscription, URI de redirection Web ci-dessus.</li>
+      <li>Vue d'ensemble : ID d'application, ID d'annuaire.</li>
+      <li>Certificats et secrets → Nouveau secret : sa Value, pas son ID.</li>
+      <li>Autorisations des API → Microsoft Graph, déléguées : <code>Calendars.ReadWrite</code>,
         <code>offline_access</code>, <code>openid</code>, <code>email</code>.</li>
     </ol>
-    <p class="muted">Une école peut exiger l'accord d'un administrateur (« Approval required ») : la connexion le dira.</p>
     {{end}}
   </details>
 </div>

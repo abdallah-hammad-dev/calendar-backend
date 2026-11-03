@@ -38,7 +38,16 @@ import (
 //go:embed templates/*.html
 var templates embed.FS
 
-var pages = template.Must(template.New("").Funcs(template.FuncMap{"kind": kindLabel}).ParseFS(templates, "templates/*.html"))
+var pages = template.Must(template.New("").Funcs(template.FuncMap{
+	"kind": kindLabel,
+	// card: a Google or Microsoft "add" card, its sign-in and the collections offered.
+	"card": func(p provider, c []davis.Calendar) addCard { return addCard{P: p, Collections: c} },
+}).ParseFS(templates, "templates/*.html"))
+
+type addCard struct {
+	P           provider
+	Collections []davis.Calendar
+}
 
 // CallbackPath is where providers send the browser back after sign-in: BASE_URL + CallbackPath is the redirect URI
 // set up at Google and Microsoft.

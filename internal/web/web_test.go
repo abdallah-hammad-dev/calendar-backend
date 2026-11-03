@@ -200,7 +200,7 @@ func TestProviderSettings(t *testing.T) {
 	e := setup(t, offline(t), "/dav/calendars/abd/", "abd@bench.test", nil)
 	e.login(t)
 	if _, body := e.get(t, "/"); !strings.Contains(body, `action="/settings/google"`) ||
-		!strings.Contains(body, `action="/settings/microsoft"`) || !strings.Contains(body, "Pas encore configurée") {
+		!strings.Contains(body, `action="/settings/microsoft"`) || !strings.Contains(body, "Non configurée") {
 		t.Fatal("no settings forms")
 	}
 	settle := func(kind string, form url.Values, want string) {
@@ -227,7 +227,7 @@ func TestProviderSettings(t *testing.T) {
 	if strings.Contains(body, "GOCSPX-first") {
 		t.Fatal("the secret is on the page")
 	}
-	if !strings.Contains(body, id) || !strings.Contains(body, "secret enregistré") {
+	if !strings.Contains(body, id) || !strings.Contains(body, "Enregistré (vide = inchangé)") {
 		t.Fatal("the client isn't shown")
 	}
 
