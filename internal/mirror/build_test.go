@@ -8,6 +8,7 @@ import (
 	"github.com/emersion/go-ical"
 
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/ics"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/store"
 )
 
 func crlf(s string) string { return strings.ReplaceAll(strings.TrimLeft(s, "\n"), "\n", "\r\n") }
@@ -206,5 +207,21 @@ func TestFileName(t *testing.T) {
 	a, b := FileName("abc@google.com"), FileName("abc_google.com")
 	if a == b || !strings.HasPrefix(a, "abc_google.com-") || unsafeName.MatchString(strings.TrimSuffix(a, ".ics")) {
 		t.Fatalf("%q / %q", a, b)
+	}
+}
+
+// An account's copies say which account: by my address there, or by its name for a feed without it (a timetable).
+func TestSourceAccount(t *testing.T) {
+	for _, c := range []struct {
+		a    store.Account
+		want string
+	}{
+		{store.Account{Kind: "google", Name: "Gmail", Address: "Me@Gmail.com"}, "google:me@gmail.com"},
+		{store.Account{Kind: "ics", Name: "Outlook de l'école", Address: "mailto:me@school.fr"}, "ics:me@school.fr"},
+		{store.Account{Kind: "ics", Name: "Cours", Address: ""}, "ics:Cours"},
+	} {
+		if got := SourceAccount(c.a); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.a, got, c.want)
+		}
 	}
 }

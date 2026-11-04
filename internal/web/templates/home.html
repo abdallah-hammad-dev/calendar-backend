@@ -18,7 +18,7 @@
       <span class="name">{{.Name}}</span>
       {{if .LastError}}<span class="badge bad">Erreur</span>{{end}}
     </div>
-    <div class="muted">{{kind .Kind}}{{if ne .Name .Address}} · {{.Address}}{{end}} · dans {{.CollectionName}} · synchro {{.LastSyncText}}</div>
+    <div class="muted">{{kind .Kind}}{{if and .Address (ne .Name .Address)}} · {{.Address}}{{end}} · dans {{.CollectionName}} · synchro {{.LastSyncText}}</div>
   </div>
   <div class="actions">
     {{if .SignIn}}
@@ -66,8 +66,8 @@
       <input id="i-name" type="text" name="name" required placeholder="Emploi du temps">
     </div>
     <div>
-      <label for="i-address">Mon adresse dans ce calendrier</label>
-      <input id="i-address" type="email" name="address" required placeholder="moi@ecole.fr">
+      <label for="i-address">Mon adresse dans ce calendrier <span class="opt">facultatif</span></label>
+      <input id="i-address" type="email" name="address" placeholder="Si tu y es invité : moi@ecole.fr">
     </div>
     <div>
       <label for="i-collection">Dans le calendrier</label>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -189,6 +190,27 @@ func TestFeedForm(t *testing.T) {
 	} {
 		if resp := e.post(t, "/accounts/ics", f); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%v: %s", f, resp.Status)
+		}
+	}
+
+	// A feed is told apart by its link, not by my address in it (optional: a timetable invites nobody). The
+	// accepted ones then fail on the offline Davis, past the form's checks.
+	if _, err := e.store.AddAccount(context.Background(), store.Account{Kind: "ics", Name: "Outlook de l'école",
+		Address: "me@school.fr", Config: `{"url":"https://x.test/a.ics"}`, Collection: "/dav/calendars/abd/default/"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		f    url.Values
+		want string
+	}{
+		{url.Values{"name": {"Encore"}, "url": {"webcal://X.test/a.ics"}}, "déjà ajouté"},
+		{url.Values{"name": {"Intranet"}, "address": {"me@school.fr"}, "url": {"https://x.test/b.ics"}}, "Impossible d'ajouter"},
+		{url.Values{"name": {"Cours"}, "url": {"https://x.test/c.ics"}}, "Impossible d'ajouter"},
+	} {
+		resp := e.post(t, "/accounts/ics", c.f)
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(html.UnescapeString(string(body)), c.want) {
+			t.Errorf("%v: %s, want %q in:\n%s", c.f, resp.Status, c.want, body)
 		}
 	}
 }

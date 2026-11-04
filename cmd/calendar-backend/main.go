@@ -154,12 +154,12 @@ func run(ctx context.Context, envFile, cmd string, args []string) error {
 	case "add-feed":
 		fs := flag.NewFlagSet("add-feed", flag.ExitOnError)
 		name := fs.String("name", "", "the account's name")
-		address := fs.String("address", "", "my address on that account (the one invited)")
+		address := fs.String("address", "", "my address in it, if I'm invited there (optional)")
 		url := fs.String("url", "", "the feed: https://…, webcal://… or file:///…")
 		collection := fs.String("collection", "", "the collection of mine its events go into, by name or href")
 		fs.Parse(args)
-		if *name == "" || *address == "" || *url == "" || *collection == "" {
-			return errors.New("add-feed: -name, -address, -url and -collection are required")
+		if *name == "" || *url == "" || *collection == "" {
+			return errors.New("add-feed: -name, -url and -collection are required")
 		}
 		conf, _ := json.Marshal(accounts.FeedConfig{URL: *url})
 		a, err := e.AddAccount(ctx, store.Account{Kind: "ics", Name: *name, Address: *address, Config: string(conf)}, *collection)

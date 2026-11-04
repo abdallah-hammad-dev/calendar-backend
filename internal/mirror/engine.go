@@ -61,7 +61,16 @@ func (e *Engine) now() time.Time {
 }
 
 func (e *Engine) target(a store.Account) Target {
-	return Target{Account: a.Kind + ":" + ics.Address(a.Address), Me: e.Me, Vault: e.Vault, Loc: e.Loc}
+	return Target{Account: SourceAccount(a), Me: e.Me, Vault: e.Vault, Loc: e.Loc}
+}
+
+// SourceAccount is the X-CALTASKS-SOURCE-ACCOUNT of a's copies: <kind>:<address>, or <kind>:<name> for a feed that
+// doesn't have my address (a timetable).
+func SourceAccount(a store.Account) string {
+	if a.Address == "" {
+		return a.Kind + ":" + a.Name
+	}
+	return a.Kind + ":" + ics.Address(a.Address)
 }
 
 // ErrCollection: the collection asked for doesn't exist, is ambiguous, or can't hold events.

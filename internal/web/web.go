@@ -12,6 +12,7 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -522,23 +523,26 @@ func (s *Server) collections(ctx context.Context) ([]davis.Calendar, error) {
 
 // --- adding accounts
 
+// addFeed adds a published calendar. My address in it is optional (a timetable invites nobody: it only says which
+// ATTENDEE is me, to show my answers), and several feeds may share it (the school's Outlook and its intranet): a
+// feed is told apart by its link.
 func (s *Server) addFeed(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.PostFormValue("name"))
 	address := strings.TrimSpace(r.PostFormValue("address"))
 	link := strings.TrimSpace(r.PostFormValue("url"))
 	u, err := url.Parse(link)
 	switch {
-	case name == "" || address == "" || link == "":
-		s.problem(w, "Donne un nom, ton adresse sur ce compte et le lien du calendrier.")
+	case name == "" || link == "":
+		s.problem(w, "Donne un nom et le lien du calendrier.")
 		return
 	case err != nil || (u.Scheme != "https" && u.Scheme != "http" && u.Scheme != "webcal") || u.Host == "":
 		s.problem(w, "Le lien doit commencer par https://, http:// ou webcal://.")
 		return
-	case !strings.Contains(address, "@"):
+	case address != "" && !strings.Contains(address, "@"):
 		s.problem(w, "L'adresse doit être une adresse mail.")
 		return
 	}
-	if s.duplicate(r.Context(), "ics", address, w) {
+	if s.sameFeed(r.Context(), link, w) {
 		return
 	}
 	conf := fmt.Sprintf(`{"url":%q}`, link)
@@ -549,6 +553,36 @@ func (s *Server) addFeed(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Engine.Wake()
 	http.Redirect(w, r, "/?ok=added", http.StatusSeeOther)
+}
+
+// sameFeed refuses a second account for the same feed (its events would be copied twice). webcal:// is https://.
+func (s *Server) sameFeed(ctx context.Context, link string, w http.ResponseWriter) bool {
+	list, err := s.Store.Accounts(ctx)
+	if err != nil {
+		s.fail(w, err)
+		return true
+	}
+	for _, a := range list {
+		var conf accounts.FeedConfig
+		if a.Kind == "ics" && json.Unmarshal([]byte(a.Config), &conf) == nil && feedKey(conf.URL) == feedKey(link) {
+			s.problem(w, "Ce calendrier est déjà ajouté ("+a.Name+").")
+			return true
+		}
+	}
+	return false
+}
+
+// feedKey is a feed's link as compared: scheme and host in lower case, webcal:// as https://.
+func feedKey(link string) string {
+	u, err := url.Parse(strings.TrimSpace(link))
+	if err != nil {
+		return strings.TrimSpace(link)
+	}
+	u.Scheme, u.Host = strings.ToLower(u.Scheme), strings.ToLower(u.Host)
+	if u.Scheme == "webcal" {
+		u.Scheme = "https"
+	}
+	return u.String()
 }
 
 // duplicate refuses a second account for the same address of the same kind (its events would be copied twice).

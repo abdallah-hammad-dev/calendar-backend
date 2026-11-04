@@ -82,7 +82,11 @@ notification) and in Obsidian, and my answer leaves from the address that was in
   to a personal Microsoft account if the school allows external forwarding.
 - **ICS feed** (B1, `internal/adapter/icsfeed`): a published `https://` / `webcal://` link (or a `file://` for
   tests), read whole at each pass (its hash is the "sync token"), read-only: answers stay on Davis, not sent. It is
-  the plan B above, and what B1 runs with.
+  the plan B above, and what B1 runs with. **My address in it is optional** (2026-11-04, the user adding the
+  intranet's timetable with the school address already used by the school's Outlook feed: refused, "faudrait
+  pouvoir en rajouter sans mail, ou alors pouvoir mettre le même mail"): it only says which `ATTENDEE` is me, and a
+  timetable invites nobody. Feeds are told apart by their link (`webcal://` = `https://`), not by that address:
+  several may share it.
 - **Google** (B2, 2026-10-23, `internal/adapter/google`): the account's main calendar, `events.list` with
   `showDeleted` (a cancelled occurrence is how Google says it was taken out of its series) and recurring events not
   expanded; `410` on a sync token → a full listing. A series comes whole: when any of its events changed, it is
@@ -154,8 +158,9 @@ Every field the extension or the iPhone reads must be copied, or it's missing on
 - `URL:obsidian://calendar-tasks?vault=<vault>&uid=<UID>`, the link back to the note (extension spec §4.5); the
   vault name is a backend setting;
 - `X-CALTASKS-SOURCE-ACCOUNT` (which account; it's what makes an event a mirror for the extension),
-  `X-CALTASKS-RSVP-STATE` (§6). Its value is `<kind>:<address>` (`ics:me@school.fr`); the extension only checks that
-  it's there.
+  `X-CALTASKS-RSVP-STATE` (§6). Its value is `<kind>:<address>` (`ics:me@school.fr`), or `<kind>:<name>` for a feed
+  without my address (`ics:Cours`); feeds sharing an address share it (the engine tells their copies apart by its
+  `items`, not by this value; tested against the bench Davis). The extension only checks that it's there.
 - The provider's event id for an answer: **a table in the backend's database** (`items.source_id`, decided in B1),
   no `X-SOURCE-ID` on the event.
 
