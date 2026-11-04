@@ -190,7 +190,7 @@ sur l'iPhone), dans une collection jetable supprimée à la fin.
 ## Backend B2–B5 contre Davis (2026-10-23)
 
 Même façon de faire (`orga`, collections jetables). Google et Microsoft ne sont pas encore essayés sur de vrais
-comptes : leurs adaptateurs sont testés sur des réponses construites d'après la doc des API (spec §11, ce qu'il
+comptes : leurs adaptateurs sont testés sur des réponses construites d'après la doc des API (spec §12, ce qu'il
 faudra vérifier en premier).
 
 | Test | Résultat |
@@ -250,3 +250,34 @@ d'une invitation envoyée à une autre adresse, et notre `RSVP` Google refuse un
 `offline_access`, `Calendars.ReadWrite` et le profil. L'école ne laisse pas les étudiants consentir eux-mêmes, même à
 une app de son propre annuaire. Son circuit de demande est actif : un champ de justification et un bouton « Request
 approval ». Google (Gmail) : connecté le même jour, première passe sans erreur.
+
+## Connecteur Claude : Davis et livesync-bridge (2026-11-04)
+
+**Davis, `calendar-query` avec `<c:expand>`** (banc, utilisateur `orga`) : chaque occurrence revient en `VEVENT` à
+part avec son `RECURRENCE-ID` (en UTC, ou `VALUE=DATE` pour une journée entière), heures en UTC, journée entière
+gardée en `DATE`. Les dates d'un `EXDATE` sont absentes, les exceptions sont là (à leur place, avec leurs heures).
+`VALARM` et `X-CALTASKS-SOURCE-ACCOUNT` restent. Chaque requête à Davis coûte ~200 ms sur le banc (la vérification du
+mot de passe Basic) : le connecteur garde la liste des collections 30 s.
+
+**livesync-bridge** (commit `1c25230`, image construite depuis GitHub : aucune n'est publiée), essayé en local :
+CouchDB 3.5.3 avec `deploy/couchdb.ini`, deux ponts sur la même base comme deux appareils (E2EE, chemins
+obscurcis, clé d'ID), `internal/vault` du backend pour écrire côté A.
+
+- Passent en quelques secondes de A à B : une note dans un dossier existant (écrite dans `tmp/` puis renommée), une
+  note dans un nouveau dossier (réécrite 3 s après), une réécriture, la suppression d'un fichier et d'un dossier, un
+  renommage qui ne change que la casse. Une note écrite par B revient dans le dossier de A. Pont A arrêté : ce que B
+  change et ce qui est écrit dans le dossier de A pendant ce temps passent au redémarrage.
+- **Un déplacement vers un nouveau dossier, et un dossier renommé, ne passaient pas** : B perdait l'ancien chemin
+  sans jamais recevoir le nouveau (le README du pont prévient : son observateur rate un fichier qui arrive dans un
+  dossier tout juste créé). Corrigé : `Move` réécrit chaque fichier déplacé 3 s après. Ensuite tout passe, liens
+  réécrits compris.
+- Sans `_local/obsydian_livesync_milestone` (les réglages que LiveSync met dans la base), le pont ne suit jamais la
+  base (« Remote database looks like empty », santé « connected (empty remote) »). Le sel du chiffrement est dans
+  `_local/obsidian_livesync_sync_parameters`. CouchDB ne réplique pas les documents `_local` : la copie d'essai de
+  `deploy.sh` les recopie. Un pont neuf sur la copie a tout relu.
+- Deux ponts lancés au même moment sur une base sans ces réglages : l'un échoue (« Cannot read properties of null »)
+  et repart bien au redémarrage. Ça n'arrive pas sur le VPS : la base a déjà ses réglages.
+- Au démarrage, le scan du dossier n'envoie que les fichiers présents et changés, jamais de suppression : un dossier
+  vide au départ ne vide pas le vault.
+- Pas d'écho : la séquence de la base ne bouge plus au repos (une minute, trois ponts).
+- Le pont journalise les chemins des notes (niveau debug, sans réglage) : journal tournant, sur le VPS seulement.

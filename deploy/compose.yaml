@@ -1,6 +1,7 @@
 # The server, on the VPS in /opt/calendar (deploy.sh puts it there): Caddy (HTTPS) in front of Davis, the backend
-# and CouchDB (the vault's sync). Values come from .env next to this file (root only); each service gets only its
-# own. The backend's image comes from CI (update), the others are pinned here.
+# and CouchDB (the vault's sync), and livesync-bridge (the vault mirrored for the Claude connector, profile "vault").
+# Values come from .env next to this file (root only); each service gets only its own. The backend's image comes
+# from CI (update), the others are pinned here.
 name: calendar
 
 services:
@@ -54,6 +55,8 @@ services:
     image: calendar-backend:current
     pull_policy: never
     restart: unless-stopped
+    # livesync-bridge's user (its image's): both write the vault's files (deploy.sh owns the volumes to it).
+    user: "1993:1993"
     depends_on:
       - davis
     environment:
@@ -68,8 +71,15 @@ services:
       MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID}
       MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET}
       MICROSOFT_TENANT: ${MICROSOFT_TENANT}
+      # The Claude connector (spec §10): /vault/notes is the bridge's mirror. Set by deploy.sh: "" while the bridge
+      # isn't configured (calendar and tasks only; the note tools say so).
+      VAULT_DIR: ${VAULT_DIR:-}
+      TASKS_FOLDER: ${TASKS_FOLDER:-Tasks}
+      EVENTS_FOLDER: ${EVENTS_FOLDER:-Calendar}
+      EVENT_DATE_FORMAT: ${EVENT_DATE_FORMAT:-DD-MM-YYYY}
     volumes:
       - backend-data:/data
+      - vault:/vault
 
   couchdb:
     image: docker.io/library/couchdb:3.5.3
@@ -85,6 +95,50 @@ services:
       # Owned by CouchDB's user (5984, deploy.sh): its entrypoint would chown it and fail on a read-only file.
       - ./couchdb.ini:/opt/couchdb/etc/local.d/10-livesync.ini:ro
 
+  # livesync-bridge (spec §10.3): the vault both ways between my LiveSync database and the vault volume's notes/,
+  # decrypted with the passphrase and the ID key (bridge/config.json, made by deploy.sh from .env: root's, readable
+  # by the bridge's group). No image is published: built from this commit (2026-11-04).
+  bridge:
+    build:
+      context: https://github.com/vrtmrz/livesync-bridge.git#1c252305bbddcacd200b8560d3bb786afe0906e9
+    image: livesync-bridge:1c25230
+    profiles: ["vault"]
+    restart: unless-stopped
+    depends_on:
+      - couchdb
+    volumes:
+      - ./bridge:/app/dat:ro
+      # Its storage peer's folder is data/notes/; the backend keeps its history, trash and temporary files beside it.
+      - vault:/app/data
+      # What it last saw of each file and of the database (its resume points): kept across new containers.
+      - bridge-state:/deno-dir/location_data
+    # It writes a heartbeat every 10 s (main.ts): stale or not ok = unhealthy (docker compose ps, deploy.sh).
+    healthcheck:
+      test: ["CMD", "deno", "eval", "const h = JSON.parse(Deno.readTextFileSync('/tmp/lsb-health.json')); if (Date.now() - h.ts > 60000 || !h.ok) Deno.exit(1)"]
+      interval: 1m
+      timeout: 20s
+      start_period: 10m
+    # Its logs name the notes it syncs (debug level, no setting): rotated, on the VPS only.
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  # deploy.sh's, run once per deploy: the backend and the bridge write the vault's files as one user, the bridge's
+  # (its image's uid 1993), so the volumes are owned by it; the bridge's folder must be there when it starts. Caddy's
+  # image: already there, and it has a shell. deploy.sh also runs another command in it (the mirror made again).
+  owner:
+    image: docker.io/library/caddy:2.11.7
+    profiles: ["tools"]
+    user: root
+    network_mode: none
+    entrypoint: ["sh", "-c"]
+    command: ["mkdir -p /vault/notes && chown -R 1993:1993 /backend-data /vault"]
+    volumes:
+      - backend-data:/backend-data
+      - vault:/vault
+
 volumes:
   caddy-data:
   caddy-config:
@@ -92,3 +146,5 @@ volumes:
   backend-data:
   couchdb-data:
   couchdb-config:
+  vault:
+  bridge-state:

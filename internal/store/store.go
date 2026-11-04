@@ -20,10 +20,12 @@ var (
 	schemaV2 string
 	//go:embed schema3.sql
 	schemaV3 string
+	//go:embed schema4.sql
+	schemaV4 string
 )
 
 // migrations[i] takes the database from version i to i+1 (PRAGMA user_version).
-var migrations = []string{schemaV1, schemaV2, schemaV3}
+var migrations = []string{schemaV1, schemaV2, schemaV3, schemaV4}
 
 var ErrNotFound = errors.New("store: not found")
 

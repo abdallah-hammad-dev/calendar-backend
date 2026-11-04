@@ -1,0 +1,23 @@
+{{define "consent"}}{{template "head"}}
+<header><h1>Comptes</h1></header>
+<form class="card" method="post" action="/authorize">
+  <h2>Autoriser {{.Client}} ?</h2>
+  <p class="lead">Il demande à se connecter à ton coffre et à ton calendrier. Si tu acceptes, il pourra :</p>
+  <ul class="muted">
+    <li>lire, écrire, renommer et supprimer tes notes (une note supprimée va dans la corbeille du serveur) ;</li>
+    <li>créer, changer et supprimer tes tâches et tes événements, dans toutes tes collections ;</li>
+    <li>répondre aux invitations reçues sur tes comptes.</li>
+  </ul>
+  <dl class="kv">
+    <dt>Renvoie vers</dt><dd><code>{{.Host}}</code></dd>
+    <dt>Accès</dt><dd><code>{{.Resource}}</code></dd>
+  </dl>
+  <p class="hint">N'accepte que si tu viens de l'ajouter toi-même (dans Claude : Réglages, Connecteurs). Tu pourras le
+    déconnecter depuis la page des comptes.</p>
+  {{range $k, $v := .Hidden}}<input type="hidden" name="{{$k}}" value="{{$v}}">
+  {{end}}<div class="row">
+    <button type="submit" name="decision" value="allow" class="primary">Autoriser</button>
+    <button type="submit" name="decision" value="deny">Refuser</button>
+  </div>
+</form>
+{{template "foot"}}{{end}}

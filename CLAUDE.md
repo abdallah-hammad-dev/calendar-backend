@@ -12,13 +12,17 @@ backend must write. This repo is private.
 - B1 done (2026-10-22): Go skeleton, mirrors an ICS feed into Davis, sees my answers.
 - B2–B5 coded (2026-10-23): Google and Microsoft adapters, the RSVP relay, the accounts page (`run` serves it).
   Tested on API answers shaped from the references (adapters) and against the bench Davis (relay, page); **not yet
-  on real accounts**: spec §11 lists what to check first.
+  on real accounts**: spec §12 lists what to check first.
 - **Deployed 2026-10-29** (spec §8) on `my-vps` (hosts nothing else): `cal.` / `sync.` /
   `accounts.my.example.com`, Let's Encrypt certificates, my Davis user `abd`. Each push on `main`
   deploys the backend (CI, ~2 min). The VPS's sudo is sudo-rs (Ubuntu 26.04).
 - Next: the iPhone, Obsidian and LiveSync on the real addresses; the Google Cloud project and the Entra app
   (`docs/comptes.md`) into `deploy/.env` then `./deploy.sh`; test on real accounts and fix. Not done: backups,
-  moving my data from the bench. Open questions in spec §11 are the user's to answer.
+  moving my data from the bench. Open questions in spec §12 are the user's to answer.
+- B8, the Claude connector (spec §10), coded 2026-11-04: an MCP endpoint in the backend (`/mcp`, its own OAuth)
+  writes tasks / events into Davis and notes into the vault livesync-bridge mirrors on the VPS. Tested against the
+  bench Davis, over HTTP, and the bridge locally (`bench/TESTS.md`); not yet on the VPS (`./deploy.sh` asks for the
+  LiveSync database, passphrase and recovery code, runs the bridge on a copy first).
 
 ## New machine
 
@@ -38,6 +42,8 @@ backend must write. This repo is private.
   (copy `backend.env.example`), database in `data/` (both git-ignored). `run` serves the accounts page on `LISTEN`
   (login: the Davis user).
 - `DAVIS_TEST_URL=… go test ./internal/web/` runs the whole sign-in (fake Google) against the bench Davis.
+- `DAVIS_TEST_URL=… go test ./internal/connector/` runs the connector's tools against the bench Davis (as `orga`,
+  throwaway collections "IT Général / IT École …", a temporary vault). ~40 s: each Davis request costs ~200 ms.
 - `podman build -t calendar-backend .` — the image (static binary on distroless, zones embedded).
 - `./deploy.sh [--new-key]` — installs or updates the VPS from `deploy/` (settings and secrets in `deploy/.env`,
   git-ignored), checks before and after, sets CI's secrets. A push on `main` deploys the backend
@@ -66,6 +72,16 @@ backend must write. This repo is private.
 - `internal/htmltext` — HTML descriptions to plain text, keeping link targets.
 - `internal/web` — the accounts page (templates embedded, French): login, add / sign in again / remove, sync now,
   the trash and its Restaurer, the OAuth clients (`/settings/{kind}`), the public `/privacy` page Google asks for.
+  `authorize.go`: the connector's OAuth server (metadata, registration limited to Claude's callbacks and loopback,
+  consent behind the Davis login, tokens, revoke from the page) in front of `/mcp`.
+- `internal/connector` — the MCP server (official Go SDK, stateless streamable HTTP): `calendar.go` (collections,
+  events, free slots, rsvp; `calendar-query` with `expand`), `tasks.go` (VTODOs as the extension writes them, the
+  note name it will give), `notes.go` (the vault tools, task / event notes' Davis-owned properties guarded),
+  `ical.go`. Logs: tool, outcome, ms, UIDs; never contents, inputs, outputs or note paths.
+- `internal/vault` — the vault on disk (`VAULT_DIR`: `notes/` = the bridge's folder, `history/`, `trash/`,
+  `tmp/`), all through `os.Root`: atomic writes, versions, history (30 days) and trash, link rewriting on a move
+  (`links.go`), frontmatter (`meta.go`). A file in a new folder, and every moved file, is written again 3 s later:
+  the bridge's watcher misses them otherwise (tested).
 - `internal/mirror` — `Base` (spec §5.2's rules common to every account), `Merge` (keeps what clients add),
   `trash.go` (spec §5.4: dates a client deleted, written back on every copy until restored; `Engine.Restore`), the
   `Engine` (pass = each collection accounts write into read once, then each source; answers in flight; one copy
@@ -74,9 +90,11 @@ backend must write. This repo is private.
 - `internal/store` — SQLite (modernc, no cgo): `accounts` (with their collection), `collections` (sync tokens),
   `items` (source data, Davis href/etag, partstat written, answer in flight, what the relay sent and wrote, the
   trash: `trashed`, `removed` dates), `settings` (the page's session key). Migrations by `PRAGMA user_version`
-  (`schema.sql`, `schema2.sql`, `schema3.sql`); deployed: never edit one, add the next.
-- `deploy/` — the VPS's `compose.yaml` (Caddy, Davis, backend, CouchDB), `Caddyfile`, `couchdb.ini` (LiveSync's
-  settings; owned by CouchDB's uid 5984 on the VPS, or its entrypoint fails), `update` (CI's only command).
+  (`schema.sql` … `schema4.sql`, the connector's OAuth clients and tokens); deployed: never edit one, add the next.
+- `deploy/` — the VPS's `compose.yaml` (Caddy, Davis, backend, CouchDB, livesync-bridge under the profile `vault`,
+  the one-shot `owner`), `Caddyfile`, `couchdb.ini` (LiveSync's settings; owned by CouchDB's uid 5984 on the VPS, or
+  its entrypoint fails), `update` (CI's only command). The backend runs as the bridge's uid 1993 (both write the
+  vault); the bridge's config (`/opt/calendar/bridge/`) is made by `deploy.sh`.
 
 ## Hard rules
 
@@ -90,7 +108,10 @@ backend must write. This repo is private.
 - Bench tests write only to bench users (`abd`, `orga`) and delete what they create; the user's real collections on
   the bench ("Général") are used by their iPhone: a test invitation there notifies the phone.
 - Record every new fact about Davis, iOS or a provider in `bench/TESTS.md`, and carry decisions into `docs/SPEC.md`.
-- Never log event contents (summaries, descriptions, attendees): UIDs and hrefs only. Never log tokens.
+- Never log event contents (summaries, descriptions, attendees): UIDs and hrefs only. Never log tokens. The
+  connector logs no note paths either (they are note titles), nor its inputs and outputs.
+- LiveSync's passphrase and recovery code live in `deploy/.env` and the bridge's config on the VPS only, never in
+  the VPS's `.env`, a log or the chat.
 - `X-CALTASKS-RSVP-STATE` is the store's (`items.rsvp_state`), written by `SetRSVPState` in every build; `Merge`
   doesn't carry it from the Davis copy (a client's new answer clears it).
 - The Graph adapter follows next / delta links only under its base URL: the OAuth client adds the account's token

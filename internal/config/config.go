@@ -30,6 +30,13 @@ type Config struct {
 	MicrosoftClientID     string // MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET: the Entra app registration
 	MicrosoftClientSecret string //   ("" = no Microsoft accounts)
 	MicrosoftTenant       string // MICROSOFT_TENANT: "common" (personal and any organization's accounts)
+
+	// The Claude connector (spec §10). VAULT_DIR: the vault mirrored by livesync-bridge, with the connector's
+	// history and trash (internal/vault; "" = calendar and tasks only). The extension's settings, which don't sync:
+	TasksFolder     string // TASKS_FOLDER: where it makes task notes
+	EventsFolder    string // EVENTS_FOLDER: where it makes event notes
+	EventDateFormat string // EVENT_DATE_FORMAT: DD-MM-YYYY, DD.MM.YYYY or YYYY-MM-DD
+	VaultDir        string
 }
 
 // Load reads envFile if it exists ("" = none), then the environment.
@@ -65,6 +72,11 @@ func Load(envFile string) (Config, error) {
 		MicrosoftClientID:     get("MICROSOFT_CLIENT_ID", ""),
 		MicrosoftClientSecret: get("MICROSOFT_CLIENT_SECRET", ""),
 		MicrosoftTenant:       get("MICROSOFT_TENANT", "common"),
+
+		VaultDir:        get("VAULT_DIR", ""),
+		TasksFolder:     strings.Trim(get("TASKS_FOLDER", "Tasks"), "/"),
+		EventsFolder:    strings.Trim(get("EVENTS_FOLDER", "Calendar"), "/"),
+		EventDateFormat: get("EVENT_DATE_FORMAT", "DD-MM-YYYY"),
 	}
 	var errs []error
 	if c.DavisUser == "" || c.DavisPassword == "" {
@@ -78,6 +90,11 @@ func Load(envFile string) (Config, error) {
 		if (pair[1] == "") != (pair[2] == "") {
 			errs = append(errs, fmt.Errorf("%s_CLIENT_ID and %s_CLIENT_SECRET go together", pair[0], pair[0]))
 		}
+	}
+	switch c.EventDateFormat {
+	case "DD-MM-YYYY", "DD.MM.YYYY", "YYYY-MM-DD":
+	default:
+		errs = append(errs, fmt.Errorf("EVENT_DATE_FORMAT %q: DD-MM-YYYY, DD.MM.YYYY or YYYY-MM-DD, as in the extension", c.EventDateFormat))
 	}
 	tz := get("TIMEZONE", "Europe/Paris")
 	loc, err := time.LoadLocation(tz)

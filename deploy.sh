@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Installs or updates the server on the VPS (spec §8): Caddy (HTTPS), Davis, CouchDB (the vault's sync) and the
-# backend, from deploy/. Asks for what deploy/.env lacks and makes the secrets, checks everything before touching the
-# VPS (values, SSH, DNS), then after (certificates, a Davis login, no compression on /dav/, CouchDB, the backend).
+# Installs or updates the server on the VPS (spec §8): Caddy (HTTPS), Davis, CouchDB (the vault's sync), the
+# backend and, once asked for, livesync-bridge (the vault for the Claude connector, spec §10.3), from deploy/. Asks
+# for what deploy/.env lacks and makes the secrets, checks everything before touching the VPS (values, SSH, DNS,
+# LiveSync's database), then after (certificates, a Davis login, no compression on /dav/, CouchDB, the backend).
 # Safe to run again: after a change in deploy/ or deploy/.env, or on a new VPS. Asks for the VPS's sudo password once.
 # The backend's code comes from CI (.github/workflows/deploy.yml): this script sets CI's secrets and its SSH key,
 # which can only run deploy/update. --new-key replaces that key.
@@ -66,10 +67,37 @@ optional TIMEZONE Europe/Paris
 optional MICROSOFT_TENANT common
 for k in VAULT GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET; do optional "$k"; done
 
+# The Claude connector's vault (spec §10.3): livesync-bridge reads and writes my LiveSync database on the VPS, so it
+# needs what decrypts it. Asked once; no database = no vault there (the connector has the calendar and tasks only).
+# The passphrase is kept in base64 (it may hold characters .env can't), none of this goes into the VPS's .env.
+couch() { curl -s --config - "$@" <<<"user = \"$(get COUCHDB_USER):$(get COUCHDB_PASSWORD)\""; }
+if ! grep -q '^LIVESYNC_DATABASE=' "$env_file"; then
+  echo "  Connecteur Claude : ton vault sur le VPS (livesync-bridge, spec §10.3). Vide = pas de vault là-bas."
+  dbs=$(couch --max-time 10 "https://sync.$(get DOMAIN)/_all_dbs" | tr -d '[]"' | tr ',' '\n' | grep -v '^_' || true)
+  only=""
+  [[ $(grep -c . <<<"$dbs") != 1 ]] || only=$dbs
+  [[ -z $dbs ]] || echo "  Bases dans CouchDB : $(paste -sd ' ' <<<"$dbs")"
+  read -r -p "  Base LiveSync du vault (LiveSync : Remote Database → Database name)${only:+ [$only]} : " v
+  put LIVESYNC_DATABASE "${v:-$only}"
+fi
+if [[ -n $(get LIVESYNC_DATABASE) ]]; then
+  if [[ -z $(get LIVESYNC_PASSPHRASE_B64) ]]; then
+    read -r -s -p "  Phrase de passe de LiveSync (son chiffrement de bout en bout) : " v
+    echo
+    [[ -n $v ]] || die "la phrase de passe est obligatoire avec un vault chiffré"
+    put LIVESYNC_PASSPHRASE_B64 "$(printf '%s' "$v" | base64 -w 0)"
+  fi
+  if ! grep -q '^LIVESYNC_ID_KEY=' "$env_file"; then
+    read -r -s -p "  Code de récupération (LiveSync : Show current recovery code, sls-id-v1:… ; vide si ton vault n'en a pas) : " v
+    echo
+    put LIVESYNC_ID_KEY "$v"
+  fi
+fi
+
 # Compose reads $ in .env, and quotes would be kept: none of them, nor backslashes.
 bad=$(grep -nE '^[A-Z_]+=.*[$"'"'"'`\\]' "$env_file" | cut -d= -f1 || true)
 [[ -z $bad ]] || die "deploy/.env : pas de \$, de guillemets ni de \\ dans les valeurs (ligne $bad)"
-for k in VPS DOMAIN ACME_EMAIL DAVIS_USER DAVIS_EMAIL DAVIS_PASSWORD COUCHDB_USER COUCHDB_PASSWORD; do
+for k in VPS DOMAIN ACME_EMAIL DAVIS_USER DAVIS_EMAIL DAVIS_PASSWORD COUCHDB_USER COUCHDB_PASSWORD LIVESYNC_DATABASE; do
   printf -v "$k" '%s' "$(get "$k")"
 done
 
@@ -86,6 +114,15 @@ for p in GOOGLE MICROSOFT; do
   [[ -z $(get ${p}_CLIENT_ID) && -z $(get ${p}_CLIENT_SECRET) || -n $(get ${p}_CLIENT_ID) && -n $(get ${p}_CLIENT_SECRET) ]] ||
     die "${p}_CLIENT_ID et ${p}_CLIENT_SECRET vont ensemble (docs/comptes.md)"
 done
+if [[ -n $LIVESYNC_DATABASE ]]; then
+  # CouchDB's names, those a URL takes as they are.
+  [[ $LIVESYNC_DATABASE =~ ^[a-z][a-z0-9_-]*$ ]] || die "LIVESYNC_DATABASE : « $LIVESYNC_DATABASE » n'est pas un nom de base CouchDB"
+  [[ $LIVESYNC_DATABASE != *-bridge-copy ]] || die "LIVESYNC_DATABASE : la vraie base, pas la copie d'essai"
+  base64 -d <<<"$(get LIVESYNC_PASSPHRASE_B64)" >/dev/null 2>&1 || die "LIVESYNC_PASSPHRASE_B64 : pas du base64"
+  [[ $(get LIVESYNC_ID_KEY) =~ ^((sls-id-v1:)?[0-9a-f]{64})?$ ]] ||
+    die "LIVESYNC_ID_KEY : le code de récupération de LiveSync (sls-id-v1: et 64 caractères hexadécimaux)"
+  command -v python3 >/dev/null || die "python3 manque sur cette machine (il écrit la config du pont)"
+fi
 ok "réglages"
 
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$VPS" true || die "ssh $VPS ne marche pas"
@@ -112,6 +149,29 @@ ok "DNS : cal., sync. et accounts.$DOMAIN → $ip"
 gh repo view "$repo" --json name >/dev/null 2>&1 || die "gh n'a pas accès à $repo (gh auth login)"
 ok "GitHub : $repo"
 
+# The bridge works on a copy of the database first (spec §10.3: what to check before it touches the real one), then
+# on the real one, each time from an empty mirror. /opt/calendar/bridge-database says which one it has.
+copy=$LIVESYNC_DATABASE-bridge-copy bridge_db="" bridge_from="" make_copy=false
+if [[ -n $LIVESYNC_DATABASE ]]; then
+  code=$(couch -o /dev/null -w '%{http_code}' --max-time 10 "https://sync.$DOMAIN/$LIVESYNC_DATABASE")
+  [[ $code == 200 ]] || die "CouchDB : pas de base « $LIVESYNC_DATABASE » (réponse $code ; LIVESYNC_DATABASE de deploy/.env)"
+  bridge_from=$(ssh "$VPS" 'cat /opt/calendar/bridge-database 2>/dev/null' || true)
+  case $bridge_from in
+    "")
+      read -r -p "  Premier branchement du pont : d'abord sur une copie de ta base, pour vérifier (conseillé) ? [O/n] " v
+      if [[ $v =~ ^[nN] ]]; then bridge_db=$LIVESYNC_DATABASE; else bridge_db=$copy make_copy=true; fi ;;
+    "$copy")
+      read -r -p "  Le pont tourne sur la copie d'essai. Passer à ta vraie base (miroir refait, copie supprimée) ? [o/N] " v
+      if [[ $v =~ ^[oOyY] ]]; then bridge_db=$LIVESYNC_DATABASE; else bridge_db=$copy; fi ;;
+    "$LIVESYNC_DATABASE") bridge_db=$LIVESYNC_DATABASE ;;
+    *)
+      read -r -p "  Le pont passe de « $bridge_from » à « $LIVESYNC_DATABASE » : son miroir est refait de zéro. Continuer ? [o/N] " v
+      [[ $v =~ ^[oOyY] ]] || die "rien n'a changé sur le VPS"
+      bridge_db=$LIVESYNC_DATABASE ;;
+  esac
+  ok "pont : base $bridge_db${bridge_from:+ (avant : $bridge_from)}"
+fi
+
 # CI's key: made again when either half is missing (or --new-key). The private half goes to GitHub only.
 keydir="" stage="" tunnel=""
 cleanup() {
@@ -127,18 +187,93 @@ if $new_key || [[ $has_key != yes || -z $has_secret ]]; then
   ssh-keygen -q -t ed25519 -N '' -C "github-actions@$repo" -f "$keydir/key"
 fi
 
+# --- The test copy of the database ------------------------------------------------------------------------------
+
+if $make_copy; then
+  step "Copie de ta base pour l'essai du pont ($copy)"
+  # Replicated by CouchDB itself (3.x: both ends as URLs, with the admin's login). Its _local documents aren't, so
+  # LiveSync's are copied by hand: the milestone (without it the bridge never watches the database) and the sync
+  # parameters (E2EE's salt: without them the bridge makes new ones and can't read my notes). bench/TESTS.md.
+  COUCH_URL=https://sync.$DOMAIN COUCH_USER=$COUCHDB_USER COUCH_PASSWORD=$COUCHDB_PASSWORD \
+    SOURCE=$LIVESYNC_DATABASE TARGET=$copy python3 -I -c '
+import base64, json, os, sys, urllib.error, urllib.request
+e = os.environ
+auth = "Basic " + base64.b64encode((e["COUCH_USER"] + ":" + e["COUCH_PASSWORD"]).encode()).decode()
+def call(method, path, body=None, timeout=60):
+    req = urllib.request.Request(e["COUCH_URL"] + "/" + path, method=method,
+        data=None if body is None else json.dumps(body).encode(),
+        headers={"Authorization": auth, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as err:
+        if method == "DELETE" and err.code == 404:
+            return {}
+        sys.exit("CouchDB : %s %s : %s %r" % (method, path.split("/")[0], err.code, err.read()[:200]))
+src, dst = e["SOURCE"], e["TARGET"]
+end = lambda db: {"url": "http://127.0.0.1:5984/" + db,
+    "auth": {"basic": {"username": e["COUCH_USER"], "password": e["COUCH_PASSWORD"]}}}
+call("DELETE", dst)
+if not call("POST", "_replicate", {"source": end(src), "target": end(dst), "create_target": True}, timeout=1800).get("ok"):
+    sys.exit("CouchDB n’a pas copié la base")
+ids = [r["id"] for r in call("GET", src + "/_local_docs")["rows"]
+       if r["id"].startswith(("_local/obsidian_livesync", "_local/obsydian_livesync"))]
+if "_local/obsydian_livesync_milestone" not in ids:
+    sys.exit("pas de réglages LiveSync (_local/obsydian_livesync_milestone) dans " + src)
+for i in ids:
+    doc = call("GET", src + "/" + i)
+    doc.pop("_rev", None)
+    call("PUT", dst + "/" + i, doc)
+print("  ✓ copie : %d documents (ta base : %d), %d documents de réglages de LiveSync"
+      % (call("GET", dst)["doc_count"], call("GET", src)["doc_count"], len(ids)))' || die "copie de la base"
+fi
+
 # --- On the VPS (as root, one sudo) ------------------------------------------------------------------------------
 
 step "Installation sur le VPS (mot de passe sudo de $VPS)"
 stage=$(ssh "$VPS" mktemp -d)
 scp -q deploy/compose.yaml deploy/Caddyfile deploy/couchdb.ini deploy/update "$VPS:$stage/"
-grep -v '^VPS=' "$env_file" | ssh "$VPS" "umask 077 && cat > '$stage/env'"
+# The VPS's .env: compose's values. VAULT_DIR follows from the bridge; LiveSync's secrets go to the bridge alone.
+{
+  grep -vE '^(VPS|VAULT_DIR|LIVESYNC_[A-Z0-9_]+)=' "$env_file"
+  echo "VAULT_DIR=${bridge_db:+/vault}"
+} | ssh "$VPS" "umask 077 && cat > '$stage/env'"
 if [[ -n $keydir ]]; then
   scp -q "$keydir/key.pub" "$VPS:$stage/deploy.pub"
 fi
+# The bridge's config (livesync-bridge's types.ts): my database, decrypted as LiveSync does on my devices (my
+# settings, read 2026-11-04: legacy path identity, case-insensitive names, path obfuscation with the passphrase),
+# and the folder the backend works in. useRemoteTweaks takes the database's chunk settings. Straight to the VPS.
+if [[ -n $bridge_db ]]; then
+  DB=$bridge_db COUCH_USER=$COUCHDB_USER COUCH_PASSWORD=$COUCHDB_PASSWORD \
+    PASSPHRASE_B64=$(get LIVESYNC_PASSPHRASE_B64) ID_KEY=$(get LIVESYNC_ID_KEY) python3 -I -c '
+import base64, json, os
+e = os.environ
+phrase = base64.b64decode(e["PASSPHRASE_B64"]).decode()
+couchdb = {
+    "type": "couchdb", "name": "livesync", "group": "vault",
+    "url": "http://couchdb:5984", "database": e["DB"],
+    "username": e["COUCH_USER"], "password": e["COUCH_PASSWORD"],
+    "passphrase": phrase, "obfuscatePassphrase": phrase,
+    "baseDir": "", "useRemoteTweaks": True,
+    "customChunkSize": 0, "minimumChunkSize": 20,
+    "handleFilenameCaseSensitive": False, "pathNormalizationVersion": 0,
+}
+if e["ID_KEY"]:
+    couchdb["idDerivationKey"] = e["ID_KEY"]
+folder = {
+    "type": "storage", "name": "vault", "group": "vault",
+    "baseDir": "./data/notes/", "scanOfflineChanges": True,
+    "handleFilenameCaseSensitive": False, "pathNormalizationVersion": 0,
+}
+print(json.dumps({"peers": [couchdb, folder]}, indent=2))' | ssh "$VPS" "umask 077 && cat > '$stage/bridge.json'"
+  printf '%s\n' "$bridge_db" | ssh "$VPS" "cat > '$stage/bridge-database'"
+fi
+bridge_reset=keep
+[[ -z $bridge_db || -z $bridge_from || $bridge_from == "$bridge_db" ]] || bridge_reset=reset
 ssh "$VPS" "cat > '$stage/install.sh'" <<'INSTALL'
 set -euo pipefail
-stage=$1
+stage=$1 bridge_reset=$2
 dir=/opt/calendar
 cd "$stage"
 
@@ -197,6 +332,38 @@ services=(caddy davis couchdb)
 if docker image inspect calendar-backend:current >/dev/null 2>&1; then
   services+=(backend)
 fi
+
+# The vault for the Claude connector (spec §10.3). On another database the mirror starts from nothing: the files,
+# the connector's history and trash beside them, and what the bridge remembers of both sides.
+if [[ $bridge_reset == reset ]]; then
+  echo "  … miroir du vault refait de zéro"
+  docker compose --profile vault rm -sf bridge >/dev/null 2>&1 || true
+  docker volume rm -f calendar_bridge-state >/dev/null
+  docker compose run --rm owner 'find /vault -mindepth 1 -delete'
+  # The backend opens its folders beside notes/ at start.
+  if [[ " ${services[*]} " == *" backend "* ]]; then restart+=(backend); fi
+fi
+docker compose run --rm owner
+if [[ -f bridge.json ]]; then
+  export COMPOSE_PROFILES=vault
+  # Its config holds my passphrase: root's, readable by the bridge's group only.
+  install -d -m 750 -o root -g 1993 "$dir/bridge"
+  if [[ -f $dir/bridge/config.json ]] && ! cmp -s bridge.json "$dir/bridge/config.json"; then
+    restart+=(bridge)
+  fi
+  install -m 640 -o root -g 1993 bridge.json "$dir/bridge/config.json"
+  install -m 644 bridge-database "$dir/bridge-database"
+  docker image inspect livesync-bridge:1c25230 >/dev/null 2>&1 || {
+    echo "  … image de livesync-bridge (construite depuis GitHub)"
+    docker compose --profile vault build -q bridge
+  }
+  services+=(bridge)
+else
+  # Not (or no longer) asked for: stopped, its secrets gone. Its volumes stay, and bridge-database too: on the same
+  # database again it goes on from where it was.
+  docker compose --profile vault rm -sf bridge >/dev/null 2>&1 || true
+  rm -rf "$dir/bridge"
+fi
 docker compose up -d --remove-orphans "${services[@]}"
 if ((${#restart[@]})); then
   docker compose restart "${restart[@]}"
@@ -210,9 +377,28 @@ for i in $(seq 30); do
   sleep 2
 done
 echo "  ✓ Davis : base à jour"
+if [[ -f bridge.json ]]; then
+  # Its heartbeat, as its healthcheck reads it: up once both peers are (CouchDB's changes feed watched). A first
+  # pass over a big vault can take longer than this wait: then said, not failed.
+  up=false
+  for _ in $(seq 60); do
+    if docker compose exec -T bridge deno eval "const h = JSON.parse(Deno.readTextFileSync('/tmp/lsb-health.json'));
+      if (Date.now() - h.ts > 60000 || !h.ok) Deno.exit(1)" >/dev/null 2>&1; then
+      up=true
+      break
+    fi
+    sleep 5
+  done
+  files=$(docker compose exec -T bridge find /app/data/notes -type f | wc -l)
+  if $up; then
+    echo "  ✓ pont : en marche, $files fichiers dans le miroir"
+  else
+    echo "  … pont : pas encore prêt après 5 minutes ($files fichiers dans le miroir) ; docker compose -f $dir/compose.yaml logs bridge"
+  fi
+fi
 docker compose ps --format '  ✓ {{.Service}} : {{.Status}}'
 INSTALL
-ssh -t "$VPS" "sudo bash '$stage/install.sh' '$stage'"
+ssh -t "$VPS" "sudo bash '$stage/install.sh' '$stage' '$bridge_reset'"
 
 # --- After ---------------------------------------------------------------------------------------------------------
 
@@ -261,7 +447,6 @@ enc=$(davis -X PROPFIND -H 'Depth: 0' -H 'Accept-Encoding: gzip, br, zstd' -D - 
 [[ -z $enc ]] || die "Davis compresse sur /dav/ ($enc) : les ETag changent et If-Match échoue"
 ok "/dav/ sans compression"
 
-couch() { curl -s --config - "$@" <<<"user = \"$COUCHDB_USER:$COUCHDB_PASSWORD\""; }
 couch_ready() { [[ $(couch "https://sync.$DOMAIN/_node/_local/_config/chttpd/require_valid_user") == '"true"' ]]; }
 retry couch_ready || die "CouchDB : pas de connexion, ou réglages de LiveSync absents"
 code=$(curl -s -o /dev/null -w '%{http_code}' "https://sync.$DOMAIN/")
@@ -280,6 +465,11 @@ gh secret set VPS_HOST -R "$repo" --body "$ip" >/dev/null
 gh secret set VPS_KNOWN_HOSTS -R "$repo" --body "$known" >/dev/null
 ok "secrets GitHub : VPS_SSH_KEY, VPS_HOST, VPS_KNOWN_HOSTS"
 
+if [[ -n $bridge_db && $bridge_from == "$copy" && $bridge_db != "$copy" ]]; then
+  couch -X DELETE -o /dev/null "https://sync.$DOMAIN/$copy"
+  ok "copie d'essai supprimée ($copy)"
+fi
+
 healthy() { [[ $(curl -s --max-time 5 "https://accounts.$DOMAIN/healthz") == ok ]]; }
 if retry healthy; then
   ok "backend : https://accounts.$DOMAIN répond"
@@ -297,5 +487,7 @@ Prêt.
     https://sync.$DOMAIN   utilisateur $COUCHDB_USER   mot de passe : COUCHDB_PASSWORD de deploy/.env
   Page des comptes : https://accounts.$DOMAIN (ton utilisateur Davis)
     URI de redirection pour Google et Microsoft : https://accounts.$DOMAIN/oauth/callback (docs/comptes.md)
+  Connecteur Claude : https://accounts.$DOMAIN/mcp (claude.ai : Réglages → Connecteurs → connecteur personnalisé)
+    vault : ${bridge_db:-pas sur le VPS (calendrier et tâches seulement)}
   Tableau de bord de Davis : ssh -N -L 9100:127.0.0.1:9000 $VPS, puis http://localhost:9100
 EOF

@@ -107,6 +107,29 @@
   {{end}}
 </section>
 
+<h2 class="section" id="claude">Claude</h2>
+<section class="card">
+  <p class="muted lead">Le connecteur qui donne à Claude (claude.ai, l'app sur l'iPhone) tes notes, tes tâches et ton
+    calendrier. Dans Claude, sur le web : Réglages, Connecteurs, Ajouter un connecteur personnalisé, avec cette adresse.
+    Il te demande ensuite de l'autoriser ici.</p>
+  <dl class="kv"><dt>Adresse</dt><dd><code>{{.ConnectorURL}}</code></dd></dl>
+  {{if .Claude}}
+  <ul class="trash">
+    {{range .Claude}}
+    <li>
+      <div class="what">
+        <span class="name">{{.Name}}</span>
+        <div class="muted">{{if .Signed}}autorisé{{else}}plus connecté{{end}} · {{.LastUsedText}}</div>
+      </div>
+      <form class="inline" method="post" action="/claude/{{.ID}}/revoke">
+        <button type="submit" class="danger">Déconnecter</button>
+      </form>
+    </li>
+    {{end}}
+  </ul>
+  {{end}}
+</section>
+
 <h2 class="section">Connexions</h2>
 <section class="card">
   <dl class="kv">

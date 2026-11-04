@@ -76,12 +76,16 @@ type Server struct {
 	User     string          // the Davis user and password: the page's login
 	Password string
 	Log      *slog.Logger
+	// MCP is the Claude connector's endpoint (spec §10.4), served at MCPPath to the clients signed in here.
+	MCP http.Handler
 
 	key     []byte
 	loginMu sync.Mutex // failed logins wait one at a time
 
 	mu      sync.Mutex
-	signIns map[string]signIn // by OAuth state
+	signIns map[string]signIn    // by OAuth state
+	codes   map[string]authCode  // the connector's authorization codes, by hash
+	touched map[string]time.Time // when a connector client's last use was saved
 }
 
 // signIn is a sign-in under way at a provider.
@@ -110,6 +114,8 @@ func (s *Server) Handler(ctx context.Context) (http.Handler, error) {
 	}
 	s.key, _ = hex.DecodeString(key)
 	s.signIns = map[string]signIn{}
+	s.codes = map[string]authCode{}
+	s.touched = map[string]time.Time{}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok\n")) })
@@ -129,7 +135,9 @@ func (s *Server) Handler(ctx context.Context) (http.Handler, error) {
 		s.Engine.Wake()
 		http.Redirect(w, r, "/?ok=sync", http.StatusSeeOther)
 	}))
-	return headers(http.NewCrossOriginProtection().Handler(mux)), nil
+	cop := http.NewCrossOriginProtection()
+	s.oauthRoutes(mux, cop)
+	return headers(cop.Handler(mux)), nil
 }
 
 // headers: never framed, cached, nor sending the address (an OAuth code) to another site.
@@ -182,11 +190,21 @@ func (s *Server) cookie(value string, maxAge int) *http.Cookie {
 }
 
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
+	next := afterLogin(r.URL.Query().Get("next"))
 	if s.loggedIn(r) {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, next, http.StatusSeeOther)
 		return
 	}
-	s.render(w, http.StatusOK, "login", page{})
+	s.render(w, http.StatusOK, "login", page{Next: next})
+}
+
+// afterLogin is where the login goes on to: the connector's consent page it was sent from, or the accounts page
+// (never another address: the link could be anyone's).
+func afterLogin(next string) string {
+	if strings.HasPrefix(next, "/authorize?") {
+		return next
+	}
+	return "/"
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
@@ -199,12 +217,13 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(time.Second)
 		s.loginMu.Unlock()
 		s.Log.Warn("failed login on the accounts page", "from", r.RemoteAddr)
-		s.render(w, http.StatusUnauthorized, "login", page{Error: "Identifiant ou mot de passe incorrect."})
+		s.render(w, http.StatusUnauthorized, "login", page{Error: "Identifiant ou mot de passe incorrect.",
+			Next: afterLogin(r.PostFormValue("next"))})
 		return
 	}
 	exp := time.Now().Add(sessionLife).Unix()
 	http.SetCookie(w, s.cookie(s.sign(exp), int(sessionLife.Seconds())))
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	http.Redirect(w, r, afterLogin(r.PostFormValue("next")), http.StatusSeeOther)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
@@ -217,9 +236,12 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 type page struct {
 	Error, Notice string
 	Back          string // the error page's link back
+	Next          string // the login's next page
 	Me            string // my address on Davis
 	Accounts      []row
 	Trash         []trashRow
+	Claude        []claudeRow // the connector's clients I signed in
+	ConnectorURL  string
 	Collections   []davis.Calendar
 	Google        provider
 	Microsoft     provider
@@ -249,6 +271,13 @@ type row struct {
 	SignInOver     bool
 }
 
+// claudeRow is a client of the connector, as the page shows it.
+type claudeRow struct {
+	ID, Name     string
+	Signed       bool
+	LastUsedText string
+}
+
 // trashRow is one thing in the trash (spec §5.4): an account's event I deleted, or one date of its series (Line).
 type trashRow struct {
 	AccountID int64
@@ -262,12 +291,13 @@ type trashRow struct {
 }
 
 var notices = map[string]string{
-	"added":       "Compte ajouté : ses événements arrivent dans la collection choisie (la première fois peut prendre quelques minutes).",
-	"reconnected": "Compte reconnecté.",
-	"removed":     "Compte retiré.",
-	"restored":    "Restauré : il revient dans ton calendrier, à jour.",
-	"sync":        "Synchronisation lancée.",
-	"google-set":  "Connexion Google enregistrée : tu peux ajouter un compte Google.",
+	"added":          "Compte ajouté : ses événements arrivent dans la collection choisie (la première fois peut prendre quelques minutes).",
+	"reconnected":    "Compte reconnecté.",
+	"removed":        "Compte retiré.",
+	"restored":       "Restauré : il revient dans ton calendrier, à jour.",
+	"sync":           "Synchronisation lancée.",
+	"claude-revoked": "Connecteur déconnecté : pour t'en resservir, retire-le de Claude et ajoute-le à nouveau.",
+	"google-set":     "Connexion Google enregistrée : tu peux ajouter un compte Google.",
 	"google-set-reconnect": "Connexion Google enregistrée. Tes comptes Google ont été connectés avec l'ancien réglage : " +
 		"reconnecte-les (bouton « Reconnecter »).",
 	"microsoft-set": "Connexion Microsoft enregistrée : tu peux ajouter un compte Microsoft.",
@@ -318,6 +348,11 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.Trash = s.trashRows(trash, list)
+	if p.Claude, err = s.claudeRows(ctx); err != nil {
+		s.fail(w, err)
+		return
+	}
+	p.ConnectorURL = s.resource()
 	s.render(w, http.StatusOK, "home", p)
 }
 
@@ -686,6 +721,10 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request) {
 // --- rendering
 
 func (s *Server) render(w http.ResponseWriter, status int, name string, p page) {
+	s.renderAny(w, status, name, p)
+}
+
+func (s *Server) renderAny(w http.ResponseWriter, status int, name string, p any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := pages.ExecuteTemplate(w, name, p); err != nil {

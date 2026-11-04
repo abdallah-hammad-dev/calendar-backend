@@ -8,6 +8,7 @@
   <input id="user" type="text" name="user" autocomplete="username" autocapitalize="none" required autofocus>
   <label for="password">Mot de passe</label>
   <input id="password" type="password" name="password" autocomplete="current-password" required>
+  {{if ne .Next "/"}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
   <div class="row"><button type="submit" class="primary">Se connecter</button></div>
 </form>
 <p class="muted"><a href="/privacy">Règles de confidentialité</a></p>

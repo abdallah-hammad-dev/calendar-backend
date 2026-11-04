@@ -16,7 +16,9 @@ Two things running on my VPS, behind HTTPS on my own domain:
     date;
   - **RSVP relay**: when I answer an invitation (iPhone or Obsidian), it sends the answer through that account;
   - **accounts page**: a small web page to add / remove accounts;
-  - later (part 2, §9): **organizing meetings** from the right account, with its video link.
+  - later (part 2, §9): **organizing meetings** from the right account, with its video link;
+  - **the Claude connector** (part 3, §10): Claude's own chat (web, desktop, the phone's app) reads my vault and
+    calendar, and writes notes, tasks and events.
 
 The goal: every invitation reaching any of my addresses shows on the iPhone (Accept / Maybe / Decline + a
 notification) and in Obsidian, and my answer leaves from the address that was invited.
@@ -103,7 +105,7 @@ notification) and in Obsidian, and my answer leaves from the address that was in
 - **Open: the third, generic kind.** CalDAV (above, the recap's choice) covers accounts that have a calendar. The
   alternative is IMAP + SMTP (read invitation emails, answer by mail from that address): it covers *any* address,
   even without a calendar, but means parsing emails, and changes and cancellations arrive as emails too. To decide
-  with the list of my actual addresses (§11).
+  with the list of my actual addresses (§12).
 
 ## 5. Mirrors
 
@@ -145,7 +147,7 @@ Every field the extension or the iPhone reads must be copied, or it's missing on
   else `hangoutLink`, Zoom add-on included; Microsoft: `onlineMeeting.joinUrl`). Phone entries may go in
   `CONFERENCE;FEATURE=PHONE` (the extension ignores `tel:`). The APIs keep the link apart from the description, so
   copying the description alone can miss it (extension spec §4.5, §7.1). For the iPhone, whose Calendar may not
-  read `CONFERENCE` (§11), the link also goes in `LOCATION` when the source has none (the iPhone's "Location or
+  read `CONFERENCE` (§12), the link also goes in `LOCATION` when the source has none (the iPhone's "Location or
   Video Call" field: one field for both), else in `DESCRIPTION` when it isn't there ("Google Meet: <link>"): a room
   is never replaced (2026-10-23, `adapter.Meeting`). The extension shows no place that is only the link, and one
   "Join" whatever the link's place. If the iPhone test shows `CONFERENCE` is enough, these copies go;
@@ -181,8 +183,6 @@ Rules the mirror applies on top (B1, `internal/mirror/build.go`):
 Declined invitations stay in the mirror with `PARTSTAT=DECLINED`; the extension hides them (extension spec §4.6),
 the iPhone follows its own "show declined events" setting.
 
-## 6. RSVP relay
-
 ### 5.4 Trash
 
 (2026-11-04, the user: delete an account's event and no longer see it, "plus masqué que supprimé", with a way to
@@ -210,6 +210,8 @@ extension says nothing of it (its popup stays generic).
 - Not kept: "this and all following" from the iPhone (a changed `RRULE`, the source wins), and a copy moved to another
   calendar (the moved copy stays, no longer updated; the original goes to the trash).
 
+## 6. RSVP relay
+
 1. I answer on the iPhone or in Obsidian: my `PARTSTAT` changes in the mirror event on Davis (`PUT` with
    `If-Match`).
 2. The backend watches the collections accounts write into (sync-collection; Davis has no push, so polling),
@@ -234,9 +236,9 @@ The provider then notifies the organizer from the invited address, and the next 
   its events go into (one of mine). I open the page myself: the extension has no link to it (2026-10-24, the user:
   a link made the extension depend on the backend, and accounts are added rarely).
 - Lists each account with its state (last sync, last error); remove an account (and its events, after asking).
+- **Corbeille**: the events and dates I deleted, the last first, each with Restaurer (§5.4).
 - **Login with the Davis user** (2026-10-23, B4, `internal/web`), instead of Cloudflare Access or Tailscale: one
   backend per person, so one login, the one on the iPhone. Signed session cookie (30 days, key made once and kept
-- **Corbeille**: the events and dates I deleted, the last first, each with Restaurer (§5.4).
   in the database), a second's wait per failed login, `CrossOriginProtection` against other sites' posts, no
   framing, no caching, no referrer. OAuth with PKCE and a state good once for 15 minutes. "Sync now" starts a whole
   pass; adding an account starts one too. Signing an account in again must give the same address.
@@ -269,7 +271,8 @@ The provider then notifies the organizer from the invited address, and the next 
   - Everything needed for the calendar *and* the Obsidian vault's sync lives in this repo (the user: "tout ce qu'il
     faut pour avoir le calendrier, le sync obsidian"): the vault syncs with the **Self-hosted LiveSync** plugin
     (it runs inside the normal Obsidian app, iPhone included; end-to-end encrypted) through **CouchDB** in the same
-    compose, at `sync.<domain>`. Syncthing was set aside (no real iPhone client).
+    compose, at `sync.<domain>`. Syncthing was set aside (no real iPhone client). Since part 3 the VPS also holds
+    the vault's key, for the Claude connector (§10.3).
   - Docker on the VPS (its service starts the containers again at boot: `restart: unless-stopped`); only the
     reverse proxy (Caddy) publishes ports, 80 and 443 (Docker's ports go around ufw).
   - `deploy.sh` asks for what's missing in `.env` (domain, Let's Encrypt email, my user and password; it makes
@@ -300,6 +303,11 @@ The provider then notifies the organizer from the invited address, and the next 
   - Docker from Docker's own repository (the user, 2026-10-29, after weighing Ubuntu's `docker.io`), added to
     `unattended-upgrades` by `deploy.sh` so it updates by itself like the system.
   - Not done yet: backups of the databases, moving my data from the bench.
+- **Part 3, written 2026-11-04** (§10): livesync-bridge in the compose (profile `vault`, built from a pinned
+  commit), the backend running as its user, the vault volume shared by both. `deploy.sh` asks once for the vault's
+  LiveSync database, passphrase and recovery code (empty database: no vault on the VPS, the connector has the
+  calendar and tasks), runs the bridge on a copy first, then on the real database when I say so, and waits for its
+  heartbeat. The connector is at `https://accounts.<domain>/mcp`.
 
 ## 9. Part 2: organizing meetings
 
@@ -368,7 +376,178 @@ properties it doesn't know); without it, the form has no account choice.
 A "Guests" field, the account and tool choices in the new event form, edits allowed on the mirrored events I
 organize, the `X-CALTASKS-SEND-STATE` line, "Copy link" on the card.
 
-## 10. Milestones (in order)
+## 10. Part 3: the Claude connector
+
+Asked 2026-11-04 (the user: "i really want a connector for claude main chat, there is a lot of disscutions there
+[…] push information to my vault, and also create tasks and events"). Obsidian on the phone has no AI and Claude
+Workspace is desktop-only (it runs Claude Code); the user: "if there is no ai and i can use the claude chat, it is
+okey". Agreed the same day ("yeah do it"): keep the vault's encryption and mirror it on the VPS with livesync-bridge
+(§10.3); tasks and events go straight into Davis (§10.2). **What it can do, the same day** (the user, after a
+first draft that only created and appended: "le but c vrm d'avoir un truc similaire a claude code dans claude
+workspace, pouvoir modifie en profondeur mes notes, pareil qu'il puisse choisir de cree un event to general ou ecole
+sa depend de ce que je lui dit, cree des taches, les faire reference dans d'autres note fin logique quoi"): what
+Claude Code does in Claude Workspace, from Claude's chat.
+
+### 10.1 What I do
+
+- In Claude's chat (web, desktop or the phone's app) I talk as I would to Claude Code in Claude Workspace: it reads
+  and reworks my notes (writes, edits, moves, renames, deletes them), makes tasks and events in the collection that
+  fits what I say ("Général", "École"…), changes them, and links them from other notes. It does it through a
+  **custom connector**: an MCP server on my VPS, added once on claude.ai or in Claude Desktop (the phone's app can't
+  add one, but uses those added there).
+- What it writes reaches my devices the usual ways: tasks and events through Davis (the iPhone at its next fetch,
+  Obsidian at its next sync), notes through LiveSync. **Principle 1 holds**: nothing in Obsidian talks to the
+  connector; the extension sees CalDAV data and notes, as from any other client.
+- **The one difference with Claude Workspace**: Claude works on the VPS's copy of the vault, not inside Obsidian.
+  Every change reaches my devices *through sync*, never as a change made there: Obsidian updates no links on a
+  rename it didn't make, and the extension converts no task line it didn't see typed. So the connector does
+  itself what Obsidian and the extension do on a device (§10.2, §10.3).
+- Set aside that day:
+  - **The official Obsidian CLI on the VPS**: it drives a running Obsidian desktop app (IPC). The VPS would run
+    Obsidian with no screen (Electron, a virtual display, LiveSync and the extension inside, a keychain for the
+    CalDAV password): heavy and fragile. And the extension's logic already runs on my devices when they sync.
+  - **Turning LiveSync's encryption off**: every device rebuilt, the vault in clear in CouchDB and its backups, for
+    what the bridge gives with encryption on.
+  - **An AI inside Obsidian on the phone, through Claude Code on the VPS** (the user: "maybe not worth the hassle cuz
+    too unclean": the answer would come back through sync). Claude's own app does it.
+  - **An inbox that keeps the key off the VPS** (the connector queues notes, a plugin on a device writes them):
+    Claude couldn't read or search the vault, and a note would land only once an Obsidian opens.
+
+### 10.2 Tasks and events: through Davis
+
+The connector is one more CalDAV client, as the iPhone is, and **a task or an event has one writer: Davis**. Their
+notes' properties, names and existence follow from Davis on each device (the extension's own rules); only a note's
+body is the vault's (§10.3). Same rules as the mirror (§5.2): times in my zone (`TIMEZONE`, `TZID` + `VTIMEZONE`),
+`PUT` with `If-None-Match: *` for a new item and `If-Match` for a change, items edited in place (extension spec
+§6.2: `VALARM`, `X-APPLE-*` and unknown properties kept), contents never logged.
+
+- **The collection is Claude's choice**, from what I say: every tool that makes an item takes one, among those
+  `collections_list` gives (names, what each holds, its items' counts). A task or event moved to another collection
+  is created there, then deleted from the old one, same `UID` (as the extension does).
+- **A task is a `VTODO`**: `SUMMARY`, `DUE` (timed, or `VALUE=DATE`), `RRULE`, `PRIORITY` 1 / 5 / 9, `CATEGORIES`
+  (its tags), `RELATED-TO;RELTYPE=PARENT` for a sub-task, `STATUS` / `COMPLETED`, `CREATED`. No `URL`: the extension
+  adds its link.
+  - **Made**: the extension makes the task note at its next pull, as for a reminder made on the iPhone, and **the
+    reminder's notes (`DESCRIPTION`) become the note's body** (`TaskSync.applyItem`, only when it makes the note:
+    afterwards the body is the vault's). One note whatever the number of devices (extension spec §6.2). It shows on
+    the iPhone even with no Obsidian open.
+  - **Never as a note file**, nor as a `- [ ] … @…` line: a note from the bridge and one made by the extension from
+    the reminder could reach a device in either order (two notes, or a LiveSync conflict), and a synced line is never
+    converted.
+  - **Linked from other notes**: `task_create` returns the name the note will have (the extension's: `SUMMARY` with
+    `/\:*?"<>|#^[]` turned into spaces, in its tasks folder) after checking it's free in the vault, else says so
+    (the extension would add " (2)"). Claude then writes `[[Title]]` wherever it fits (a `- [[Title]]` line is a
+    task link with its checkbox); the link resolves once an Obsidian has made the note. A sub-task's line in its
+    parent's note is the extension's (it adds it unless the body already links to it).
+  - **Changed** in Davis: title (the extension renames the note through Obsidian, links follow), deadline,
+    repetition, priority, tags, parent, collection, done (a repeating task moves on as when ticked on the phone).
+  - **Deleted** in Davis: the extension leaves the note `done` and unlinked (extension spec §6.4). Its file can then go
+    through `vault_delete`, once it has no `caldav_uid` any more.
+- **An event is a `VEVENT`** of mine (no `X-CALTASKS-SOURCE-ACCOUNT`, so editable everywhere): `SUMMARY`, `DTSTART`
+  / `DTEND` (`VALUE=DATE` all day), `LOCATION`, `DESCRIPTION`, `RRULE`; changed and deleted in Davis, one occurrence of
+  a series as an exception or an `EXDATE`. A **work session** on a task is a `VEVENT` with `RELATED-TO:<task UID>`
+  (extension spec §4.4). **Mirrored events** are read-only but for my answer (`rsvp`: my `PARTSTAT`, which the relay
+  sends, §6) and deleting them (the trash, §5.4).
+- **An event's note**: `event_note` finds it (`caldav_uid`, and `recurrence_id` for an occurrence) or makes it as the
+  extension would (`type: event`, `start`, `end`, `caldav_uid`, `recurrence_id`; named `<day> <Title>` in its events
+  folder, extension spec §4.3). Claude then writes in it like any note; its `start` / `end` stay CalDAV's.
+- **The extension's folders and date format** (tasks folder, events folder, `eventDateFormat`) are its settings,
+  which don't sync here: the backend has them too, `TASKS_FOLDER` (`Tasks`), `EVENTS_FOLDER` (`Calendar`),
+  `EVENT_DATE_FORMAT` (`DD-MM-YYYY`), the defaults being mine (read 2026-11-04).
+- **Reading**: events in a range (mirrored ones marked, with their account; declined ones hidden unless asked; open
+  tasks' deadlines), tasks (by state, tag, deadline, collection, words), free slots (09:00–18:00 by default). Davis's
+  `calendar-query` with `expand`: sabre/dav expands recurrences itself (checked on the bench, `bench/TESTS.md`).
+
+### 10.3 Notes: the vault mirrored on the VPS
+
+- **livesync-bridge** (https://github.com/vrtmrz/livesync-bridge, by LiveSync's author, maintained: last commit
+  2026-11-04) as one more service in the compose, with two peers: my LiveSync database (CouchDB over the compose
+  network, not `sync.`) and a folder in a volume. It keeps both identical, both ways. The backend reads and writes
+  that folder as plain markdown files. **No image is published**: compose builds it from a pinned commit
+  (`1c25230`, 2026-11-04), under the profile `vault` (it runs only once configured).
+- **The bridge holds the passphrase and the vault's ID key** (LiveSync: "Show current recovery code"): `deploy.sh`
+  asks for them once, with the database's name, into `deploy/.env` (the passphrase in base64: `.env` can't hold
+  every character), and writes the bridge's config from them (`/opt/calendar/bridge/config.json`, root's, readable
+  by the bridge's group only). They don't go into the VPS's `.env`. **Encryption then protects the vault in
+  CouchDB's data and backups, not from someone inside the VPS**, which already holds my calendar and the accounts'
+  OAuth tokens in clear.
+- **My LiveSync settings fit** (read 2026-11-04 on the PC): legacy path identity (`pathNormalizationVersion: 0`, the
+  only one the bridge supports), E2EE v2, path obfuscation (the same passphrase), an ID key (v1). Every device must
+  keep legacy path identity. A move to the other one means rebuilding the database on every device.
+- Hidden files (`.obsidian/`, `.claude/`) aren't mirrored: that's the bridge's default, and LiveSync doesn't sync them
+  here either.
+- **The vault tools are Claude Code's file tools**: list (folders, a glob), search (names and contents, a regex),
+  read, write (a new note, or a whole note again), edit (exact replacements, as Claude Code's Edit), move / rename,
+  delete. Any folder: Claude picks where a note goes from the vault's layout, as in Claude Workspace.
+- **Nothing lost to a change it didn't see**: an edit applies only if the text it replaces is still there; writing a
+  whole note over one that exists needs the version `vault_read` gave (refused if the note changed since). A note
+  I'm editing on a device at the same moment can still conflict in LiveSync, as between two of my devices.
+- **Rename and move rewrite the links** to the note in every other note (`[[Name]]`, `[[Name|alias]]`,
+  `[[Name#heading]]`, embeds, as Obsidian does): a device only sees a note gone and another one made, and updates
+  nothing.
+- **Delete goes to a trash on the VPS** (beside the vault folder, not synced): gone from every device, kept until
+  restored. **The connector keeps the previous version** of each note it changes the same way, for 30 days (links
+  rewritten by a move included), so a deep rework can be undone. `vault_restore` lists both, shows one, restores it.
+- **A task note's properties, name and existence are Davis's** (§10.2): the vault tools change its body only, and send
+  a rename, a delete, or a property change to the task tools. An event note's `start`, `end`, `caldav_uid` and
+  `recurrence_id` stay as they are.
+- **The bridge's watcher misses a file that arrives in a folder just made** (its README says so; tested
+  2026-11-04, `bench/TESTS.md`): a note written into a new folder, and every file moved into a new folder or under a
+  renamed one. The devices then lose the old path and never get the new one. So the connector writes such a file
+  again 3 seconds later, same content (by then the watcher has the folder). Checking CouchDB instead was set aside:
+  the document IDs are obfuscated with the passphrase, and the rewrite is enough (tested). A restart of the backend
+  within those 3 seconds loses the rewrite: the file stays on the VPS until it changes again.
+- The vault volume holds `notes/` (the bridge's folder: the vault), and beside it the connector's `history/`,
+  `trash/` and `tmp/`. Writes are atomic: a temporary file in `tmp/` (same volume), then renamed into `notes/` (a
+  temporary file inside the folder would be synced).
+- File ownership: the bridge runs as uid 1993 (its image's user, which owns its Deno cache). **The backend runs as
+  that user too** (compose `user: "1993:1993"`); `deploy.sh` owns the backend's data volume and the vault volume to
+  it on every run (a one-shot `owner` service in Caddy's image: distroless has no `chown`).
+- **First on a copy of the database** (`deploy.sh` asks at the first setup): `<database>-bridge-copy`, replicated by
+  CouchDB, with LiveSync's `_local` documents copied by hand (CouchDB replicates none: the milestone, without which
+  the bridge never watches the database, and the sync parameters, which hold E2EE's salt). There, check that the
+  mirror has every note, readable, and, from a second Obsidian vault on the PC pointed at the copy (optional): a
+  note the connector writes opens there, an edit made there comes back, a rename and a delete reach it, and no
+  conflict appears. Then `deploy.sh` moves the bridge to the real database: the mirror is made again from nothing
+  (its files, the connector's history and trash, the bridge's resume points) and the copy is deleted.
+- At start the bridge sends only the files present and changed, never a deletion: an empty folder doesn't empty
+  the vault (tested). Its logs name the notes it syncs (debug level, no setting): Docker's `local` driver, rotated,
+  on the VPS only.
+- **LiveSync hands a rename to other devices as a create then a delete** (read in its code, 1.0.43,
+  2026-11-04: `renameFileInDBCore` stores the new path, then deletes the old one; another device applies only a
+  change of case as a rename). The extension there then sees a task note deleted, and `TaskSync.noteDeleted`
+  deletes its reminder: a task note renamed on the PC (or by the extension, after a title changed on the iPhone)
+  while another Obsidian is open would lose its reminder, then show as done. An extension bug, there already
+  without the connector: reproduced in its two-device tests and fixed the same day (extension spec §6.4: the reminder
+  goes 10 seconds after its note, unless another note holds its `caldav_uid` by then).
+
+### 10.4 The MCP endpoint
+
+- **In the backend**, which already has the Davis client, `TIMEZONE`, a public HTTPS host and the Davis login.
+  Proposal: `accounts.…/mcp` rather than a new host (same login, no DNS), MCP over streamable HTTP, with the official
+  Go SDK (`github.com/modelcontextprotocol/go-sdk`, to check).
+- **Sign-in: OAuth**, which claude.ai asks of a custom connector. The backend is its own authorization server
+  (protected resource metadata, authorization server metadata, authorization code + PKCE S256, access tokens of an
+  hour, refresh tokens of 90 days that rotate, codes of 10 minutes; only hashes stored, migration 4). Claude
+  registers itself (dynamic client registration), only with its callback: `https://claude.ai/api/mcp/auth_callback`,
+  and `https://claude.com/api/mcp/auth_callback`, which Anthropic says may replace it; loopback addresses
+  (`http://localhost`, `127.0.0.1`, `[::1]`) too, for an MCP client on my own computer (Claude Desktop's, Claude
+  Code's), which the consent still asks me for. The consent page asks for the Davis user, like the accounts page.
+  That page shows the connector's address and lists the connected clients (name, since when, last used) with a
+  Déconnecter button that revokes their tokens.
+- **Tools**: `collections_list`; `calendar_list`, `calendar_free_slots`, `event_create` / `event_update` /
+  `event_delete`, `rsvp`, `event_note`; `tasks_list`, `task_create` / `task_update` / `task_delete`,
+  `task_schedule` (a work session); `vault_list`, `vault_search`, `vault_read`, `vault_write`, `vault_edit`,
+  `vault_move`, `vault_delete`, `vault_restore` (21, built 2026-11-04 in `internal/connector`, the files in
+  `internal/vault`). Names and inputs close to the extension's Claude module (extension spec §8) and to Claude
+  Code's file tools, so Claude handles them alike. Each tool's description says the rules above that concern it (a
+  task's note is made by the extension, links resolve once it exists…), and the server's instructions the rules
+  common to all. Without a vault (`VAULT_DIR` empty: the bridge not configured) the note tools say so; the calendar
+  and task tools work.
+- **It is the strongest access on the server**: it reads and rewrites the whole vault and the calendar. Logs keep the
+  tool's name and UIDs only: no contents, no inputs or outputs, no note paths (they are note titles).
+
+## 11. Milestones (in order)
 
 - **B0 — Deploy Davis.** Compose + reverse proxy + domain on the VPS; move my data from the bench; the iPhone and
   Obsidian on the real address. *Needs me: the domain, VPS access.* *Written 2026-10-28* (`deploy.sh`, §8),
@@ -388,9 +567,15 @@ organize, the `X-CALTASKS-SEND-STATE` line, "Copy link" on the card.
   my accounts and fixes.
 - **B6 — The generic adapter** (§4, once decided).
 - **B7 — Backend in production** on the VPS. *Written 2026-10-28* with B0: CI deploys it on each push to `main`.
+- **B8 — The Claude connector** (§10, the next one since 2026-11-04). The bridge on the VPS against a copy of the
+  LiveSync database, then the real one; the endpoint and its OAuth; the calendar tools, then the vault's; added on
+  claude.ai, tried from the phone's app. *Needs me: the passphrase and the recovery code (`deploy.sh` asks), the
+  connector added on claude.ai.* *Coded 2026-11-04*: the endpoint, its OAuth and the 21 tools, tested against the
+  bench Davis and over HTTP; the bridge's compose service and `deploy.sh`'s steps, the bridge tried locally with
+  the backend's vault code (`bench/TESTS.md`). To run on the VPS.
 - Then part 2 (§9).
 
-## 11. Open questions
+## 12. Open questions
 
 - My actual addresses: Gmail and a school Microsoft account, 2026-11-01. Others? Sets the generic adapter.
 - The school's Entra route: a multi-tenant app without a verified publisher is likely stepped up to an admin, so try
@@ -420,5 +605,4 @@ organize, the `X-CALTASKS-SEND-STATE` line, "Copy link" on the card.
 - `X-` property names, fixed together with the extension (extension spec §4.7): all prefixed `X-CALTASKS-` (decided
   2026-10-22, RFC 5545's vendor prefix: no clash with another app's `X-SOURCE-ACCOUNT`); part 2's
   (`X-CALTASKS-SEND-ACCOUNT`, `X-CALTASKS-MEETING-TOOL`, `X-CALTASKS-SEND-STATE`) are still proposals.
-- Out of scope for now: an MCP endpoint (Claude outside Obsidian), `X-CALTASKS-SOURCE-MAIL` (link to the original
-  email).
+- Out of scope for now: `X-CALTASKS-SOURCE-MAIL` (link to the original email).

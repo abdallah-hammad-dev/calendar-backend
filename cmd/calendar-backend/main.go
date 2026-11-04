@@ -23,9 +23,11 @@ import (
 
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/accounts"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/config"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/connector"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/davis"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/mirror"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/store"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/vault"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/web"
 )
 
@@ -105,12 +107,24 @@ func run(ctx context.Context, envFile, cmd string, args []string) error {
 		log.Info("running", "davis", cfg.DavisURL, "user", cfg.DavisUser, "me", e.Me,
 			"davis_every", cfg.DavisEvery, "source_every", cfg.SourceEvery, "page", cfg.BaseURL,
 			"google", kinds.Provider("google") != nil, "google_from_env", fromEnv["google"],
-			"microsoft", kinds.Provider("microsoft") != nil, "microsoft_from_env", fromEnv["microsoft"])
+			"microsoft", kinds.Provider("microsoft") != nil, "microsoft_from_env", fromEnv["microsoft"],
+			"connector", cfg.BaseURL+web.MCPPath, "vault", cfg.VaultDir != "")
 		if cfg.Listen == "" {
 			return e.Run(ctx, cfg.DavisEvery, cfg.SourceEvery)
 		}
+		conn := &connector.Connector{Davis: dc, Home: p.Home, Me: p.Email(), Loc: cfg.Location, Store: st,
+			TasksFolder: cfg.TasksFolder, EventsFolder: cfg.EventsFolder, EventDateFormat: cfg.EventDateFormat,
+			Wake: e.Wake, Log: log}
+		if cfg.VaultDir != "" {
+			v, err := vault.Open(cfg.VaultDir)
+			if err != nil {
+				return fmt.Errorf("VAULT_DIR: %w", err)
+			}
+			defer v.Close()
+			conn.Vault = v
+		}
 		page := &web.Server{Engine: e, Store: st, Kinds: kinds, FromEnv: fromEnv, BaseURL: cfg.BaseURL,
-			User: cfg.DavisUser, Password: cfg.DavisPassword, Log: log}
+			User: cfg.DavisUser, Password: cfg.DavisPassword, Log: log, MCP: conn.Handler()}
 		h, err := page.Handler(ctx)
 		if err != nil {
 			return err
