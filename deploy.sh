@@ -343,16 +343,19 @@ if [[ $bridge_reset == reset ]]; then
   # The backend opens its folders beside notes/ at start.
   if [[ " ${services[*]} " == *" backend "* ]]; then restart+=(backend); fi
 fi
+# The backend is stopped first: a running one (another user before 2026-11-04) could make a file the chown misses.
+docker compose stop backend >/dev/null 2>&1 || true
 docker compose run --rm owner
-if [[ -f bridge.json ]]; then
+# (In $dir since the pull: what deploy.sh sent is in $stage.)
+if [[ -f $stage/bridge.json ]]; then
   export COMPOSE_PROFILES=vault
   # Its config holds my passphrase: root's, readable by the bridge's group only.
   install -d -m 750 -o root -g 1993 "$dir/bridge"
-  if [[ -f $dir/bridge/config.json ]] && ! cmp -s bridge.json "$dir/bridge/config.json"; then
+  if [[ -f $dir/bridge/config.json ]] && ! cmp -s "$stage/bridge.json" "$dir/bridge/config.json"; then
     restart+=(bridge)
   fi
-  install -m 640 -o root -g 1993 bridge.json "$dir/bridge/config.json"
-  install -m 644 bridge-database "$dir/bridge-database"
+  install -m 640 -o root -g 1993 "$stage/bridge.json" "$dir/bridge/config.json"
+  install -m 644 "$stage/bridge-database" "$dir/bridge-database"
   docker image inspect livesync-bridge:1c25230 >/dev/null 2>&1 || {
     echo "  … image de livesync-bridge (construite depuis GitHub)"
     docker compose --profile vault build -q bridge
@@ -377,7 +380,24 @@ for i in $(seq 30); do
   sleep 2
 done
 echo "  ✓ Davis : base à jour"
-if [[ -f bridge.json ]]; then
+# The backend, asked from Caddy's container as update does; if it doesn't answer, its last lines (no secrets there).
+if [[ " ${services[*]} " == *" backend "* ]]; then
+  up=false
+  for _ in $(seq 30); do
+    if docker compose exec -T caddy wget -q -O /dev/null -T 3 http://backend:8080/healthz 2>/dev/null; then
+      up=true
+      break
+    fi
+    sleep 2
+  done
+  if $up; then
+    echo "  ✓ backend : répond"
+  else
+    echo "  ✗ backend : ne répond pas. Ses dernières lignes :"
+    docker compose logs --no-log-prefix --tail 15 backend 2>&1 | sed 's/^/      /' || true
+  fi
+fi
+if [[ -f $stage/bridge.json ]]; then
   # Its heartbeat, as its healthcheck reads it: up once both peers are (CouchDB's changes feed watched). A first
   # pass over a big vault can take longer than this wait: then said, not failed.
   up=false
@@ -389,7 +409,7 @@ if [[ -f bridge.json ]]; then
     fi
     sleep 5
   done
-  files=$(docker compose exec -T bridge find /app/data/notes -type f | wc -l)
+  files=$(docker compose exec -T bridge find /app/data/notes -type f 2>/dev/null | wc -l || true)
   if $up; then
     echo "  ✓ pont : en marche, $files fichiers dans le miroir"
   else

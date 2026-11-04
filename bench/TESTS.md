@@ -281,3 +281,13 @@ obscurcis, clé d'ID), `internal/vault` du backend pour écrire côté A.
   vide au départ ne vide pas le vault.
 - Pas d'écho : la séquence de la base ne bouge plus au repos (une minute, trois ponts).
 - Le pont journalise les chemins des notes (niveau debug, sans réglage) : journal tournant, sur le VPS seulement.
+
+**Sur le VPS (2026-11-04, `deploy.sh`)** : deux erreurs au premier passage, corrigées.
+- Le script d'installation se place dans `/opt/calendar` avant le pont, et y cherchait la config que `deploy.sh`
+  avait envoyée dans son dossier temporaire : pas de pont. Les chemins vers ce dossier sont maintenant explicites.
+- Le backend sous l'uid du pont (1993) ne démarrait plus : `open backend.env: permission denied`. L'image distroless
+  démarre dans `/home/nonroot`, réservé à son utilisateur 65532, et un fichier facultatif cherché là renvoie
+  « permission refusée » au lieu de « absent ». `working_dir: /data` dans le compose.
+- Ensuite : sur la copie, 97 documents et la séquence restée à 97 (rien d'écrit par le pont). Sur la vraie base, la
+  séquence est restée à 177. Le miroir lu par le connecteur (OAuth, outils en lecture) : 3 fichiers identiques à
+  ceux du vault du PC (même empreinte).

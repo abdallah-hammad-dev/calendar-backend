@@ -20,9 +20,9 @@ backend must write. This repo is private.
   (`docs/comptes.md`) into `deploy/.env` then `./deploy.sh`; test on real accounts and fix. Not done: backups,
   moving my data from the bench. Open questions in spec §12 are the user's to answer.
 - B8, the Claude connector (spec §10), coded 2026-11-04: an MCP endpoint in the backend (`/mcp`, its own OAuth)
-  writes tasks / events into Davis and notes into the vault livesync-bridge mirrors on the VPS. Tested against the
-  bench Davis, over HTTP, and the bridge locally (`bench/TESTS.md`); not yet on the VPS (`./deploy.sh` asks for the
-  LiveSync database, passphrase and recovery code, runs the bridge on a copy first).
+  writes tasks / events into Davis and notes into the vault livesync-bridge mirrors on the VPS. **Deployed the same
+  day**: the bridge on `my-vault` (after a copy), the mirror checked against the PC's vault. Next: the connector
+  added on claude.ai, then tried from the phone's app.
 
 ## New machine
 

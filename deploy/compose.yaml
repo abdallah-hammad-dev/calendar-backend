@@ -57,6 +57,9 @@ services:
     restart: unless-stopped
     # livesync-bridge's user (its image's): both write the vault's files (deploy.sh owns the volumes to it).
     user: "1993:1993"
+    # Distroless starts in /home/nonroot, its own user's only: the optional backend.env looked up there gave
+    # "permission denied" instead of "missing", and the backend stopped (2026-11-04). /data is ours.
+    working_dir: /data
     depends_on:
       - davis
     environment:

@@ -507,14 +507,17 @@ body is the vault's (§10.3). Same rules as the mirror (§5.2): times in my zone
   temporary file inside the folder would be synced).
 - File ownership: the bridge runs as uid 1993 (its image's user, which owns its Deno cache). **The backend runs as
   that user too** (compose `user: "1993:1993"`); `deploy.sh` owns the backend's data volume and the vault volume to
-  it on every run (a one-shot `owner` service in Caddy's image: distroless has no `chown`).
+  it on every run (a one-shot `owner` service in Caddy's image: distroless has no `chown`), with the backend stopped
+  meanwhile. It starts in `/data` (`working_dir`): distroless's `/home/nonroot` is its own user's only.
 - **First on a copy of the database** (`deploy.sh` asks at the first setup): `<database>-bridge-copy`, replicated by
   CouchDB, with LiveSync's `_local` documents copied by hand (CouchDB replicates none: the milestone, without which
   the bridge never watches the database, and the sync parameters, which hold E2EE's salt). There, check that the
   mirror has every note, readable, and, from a second Obsidian vault on the PC pointed at the copy (optional): a
   note the connector writes opens there, an edit made there comes back, a rename and a delete reach it, and no
   conflict appears. Then `deploy.sh` moves the bridge to the real database: the mirror is made again from nothing
-  (its files, the connector's history and trash, the bridge's resume points) and the copy is deleted.
+  (its files, the connector's history and trash, the bridge's resume points) and the copy is deleted. **Done
+  2026-11-04**: on the copy, then on the real database; the bridge wrote nothing back to either (sequences
+  unchanged), and the mirror read through the connector matched the PC's vault file for file (`bench/TESTS.md`).
 - At start the bridge sends only the files present and changed, never a deletion: an empty folder doesn't empty
   the vault (tested). Its logs name the notes it syncs (debug level, no setting): Docker's `local` driver, rotated,
   on the VPS only.
