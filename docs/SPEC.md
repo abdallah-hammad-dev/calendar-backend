@@ -118,9 +118,9 @@ notification) and in Obsidian, and my answer leaves from the address that was in
   longer updated), as I say; the collection stays.
 - What I give up by mixing: a mirrored event has its collection's color, and an account can't be hidden alone
   (hiding the collection hides everything in it). A dedicated collection keeps both.
-- Mirror events are **read-only except my `PARTSTAT`** (extension spec §4.6), wherever they are: the extension
-  tells them by `X-CALTASKS-SOURCE-ACCOUNT` on the event, not by the collection. If a client changes anything else, the
-  provider wins at the next sync.
+- Mirror events are **read-only except my `PARTSTAT` and deleting them** (extension spec §4.6), wherever they are:
+  the extension tells them by `X-CALTASKS-SOURCE-ACCOUNT` on the event, not by the collection. If a client changes
+  anything else, the provider wins at the next sync. Deleted, they go to the trash (§5.4).
 - **One copy of a meeting I'm invited to on two addresses** whose accounts write into the same collection: Davis
   takes two items with the same `UID` in one collection (tested) and would show both. The first account keeps its
   copy; the other's waits and is written if that copy goes. An item already at the href that isn't the account's
@@ -183,6 +183,33 @@ the iPhone follows its own "show declined events" setting.
 
 ## 6. RSVP relay
 
+### 5.4 Trash
+
+(2026-11-04, the user: delete an account's event and no longer see it, "plus masqué que supprimé", with a way to
+see what was deleted; no two-way sync, "c'est peut-être une bourbe"; no trash calendar showing in Apple Calendar, KDE
+or any client; the extension asks first.) What the extension spec §4.6 asks of any backend that sets
+`X-CALTASKS-SOURCE-ACCOUNT`: a deleted copy stays deleted and isn't passed on. The trash is how this one does it; the
+extension says nothing of it (its popup stays generic).
+
+- **Deleting is a plain CalDAV delete, from any client** (iPhone, the extension, KDE…): the copy leaves Davis, so
+  every device. The backend sees it gone (sync-collection) and puts the item in the trash (`items.trashed`): never
+  written again, whatever the source changes, until restored. The source's changes are still kept in the store, so
+  a restore writes it up to date.
+- **One date of a series**: a client deletes it as an `EXDATE` on the master (iOS and the extension both, the date's
+  override removed). The backend takes an `EXDATE` on the Davis copy that the build from the source lacks for a
+  date I deleted (`items.removed`, the line as the client wrote it) and writes it back on every copy, without that
+  date's override, until restored. Compared as instants (`ics.Instant`): the same date in UTC or in a zone is one.
+  Read in the Davis watch, before the source can change in the same pass.
+- **Nothing goes to the provider**: deleting hides, it doesn't decline (to say no, decline). The relay sends nothing
+  for an item in the trash.
+- **Seen and restored on the accounts page** ("Corbeille"), not in a calendar: CalDAV can't hide a collection from
+  some clients. Each row: title, date, account, when deleted, Restaurer. An item leaves the trash when its source
+  deletes it (or cancels that date: nothing left to restore).
+- A meeting invited on two addresses whose accounts write into one collection (§5.1): the copy held back stays
+  held back while the other one is in the trash, and takes its place there if that one's source drops it.
+- Not kept: "this and all following" from the iPhone (a changed `RRULE`, the source wins), and a copy moved to another
+  calendar (the moved copy stays, no longer updated; the original goes to the trash).
+
 1. I answer on the iPhone or in Obsidian: my `PARTSTAT` changes in the mirror event on Davis (`PUT` with
    `If-Match`).
 2. The backend watches the collections accounts write into (sync-collection; Davis has no push, so polling),
@@ -209,6 +236,7 @@ The provider then notifies the organizer from the invited address, and the next 
 - Lists each account with its state (last sync, last error); remove an account (and its events, after asking).
 - **Login with the Davis user** (2026-10-23, B4, `internal/web`), instead of Cloudflare Access or Tailscale: one
   backend per person, so one login, the one on the iPhone. Signed session cookie (30 days, key made once and kept
+- **Corbeille**: the events and dates I deleted, the last first, each with Restaurer (§5.4).
   in the database), a second's wait per failed login, `CrossOriginProtection` against other sites' posts, no
   framing, no caching, no referrer. OAuth with PKCE and a state good once for 15 minutes. "Sync now" starts a whole
   pass; adding an account starts one too. Signing an account in again must give the same address.
@@ -371,8 +399,8 @@ organize, the `X-CALTASKS-SEND-STATE` line, "Copy link" on the card.
 - Does Apple Calendar show its "Join" button for a `CONFERENCE`-only event? (on the VPS: one event with
   `CONFERENCE` only, one with the link in the notes, one with it in the place; and whether two of them make two
   "Join".)
-- Deleting a mirrored invitation on the iPhone: decline it, or bring it back at the next sync? (B1, provisional:
-  forgotten on Davis, brought back only when the source changes the event.)
+- Deleting an invitation on the iPhone: does iOS send a decline first (which the relay would pass on)? Deleting is
+  meant to hide only (§5.4, 2026-11-04). To test on the phone.
 - `SCHEDULE-AGENT=CLIENT` on the `ORGANIZER` of mirror events would stop Davis's own scheduling on them (the
   `SCHEDULE-STATUS=3.7` attempts, and a REPLY *delivered* if the organizer happens to be a user of the same Davis).
   Bench test needed: does the iPhone still show Accept / Maybe / Decline then?

@@ -80,6 +80,33 @@
 <div class="card"><p class="muted">Aucune collection d'événements dans Davis : crée-en une (iPhone ou Obsidian).</p></div>
 {{end}}
 
+<h2 class="section" id="corbeille">Corbeille</h2>
+<section class="card">
+  {{if .Trash}}
+  <p class="muted lead">Les événements de tes comptes que tu as supprimés (iPhone, Obsidian…) : ils ne reviennent plus, même
+    s'ils changent. L'organisateur n'en sait rien.</p>
+  <ul class="trash">
+    {{range .Trash}}
+    <li>
+      <div class="what">
+        <span class="name">{{.Title}}</span>
+        <div class="muted">{{.When}} · {{.Account}} · supprimé le {{.Deleted}}</div>
+      </div>
+      <form class="inline" method="post" action="/trash/restore">
+        <input type="hidden" name="account" value="{{.AccountID}}">
+        <input type="hidden" name="uid" value="{{.UID}}">
+        {{if .Line}}<input type="hidden" name="date" value="{{.Line}}">{{end}}
+        <button type="submit">Restaurer</button>
+      </form>
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="muted lead">Vide. Un événement d'un compte que tu supprimes (sur l'iPhone, dans Obsidian…) arrive ici : il ne
+    revient plus, sauf si tu le restaures.</p>
+  {{end}}
+</section>
+
 <h2 class="section">Connexions</h2>
 <section class="card">
   <dl class="kv">

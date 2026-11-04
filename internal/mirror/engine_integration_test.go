@@ -290,14 +290,73 @@ func TestEngineAgainstDavis(t *testing.T) {
 		t.Fatal("still in the store")
 	}
 
-	// 8. Deleted on Davis: forgotten there, not brought back while the source doesn't change it.
-	if err := dc.Delete(ctx, item("it-series").Href, ""); err != nil {
+	// 8. The trash (spec §5.4). One date deleted from the series as iOS and the extension do: an EXDATE in the
+	// master's form, the date's override gone. It stays deleted when the source changes the series, and comes
+	// back, override and all, once restored.
+	renamed := func(name string) string {
+		return strings.Replace(seriesEvent, "SUMMARY:Series\n", "SUMMARY:"+name+"\n", 1)
+	}
+	got, series := davisCopy("it-series")
+	var kept []*ical.Component
+	for _, c := range series.Children {
+		if c.Name != ical.CompEvent || ics.RecurrenceID(c) == "" {
+			kept = append(kept, c)
+		}
+	}
+	series.Children = kept
+	ics.Events(series)[0].Props.Add(ics.Prop(ical.PropExceptionDates, "20261109T140000", ical.PropTimezoneID, "Europe/Paris"))
+	if _, err := dc.Put(ctx, got.Href, ics.Encode(series), got.ETag); err != nil {
 		t.Fatal(err)
 	}
 	pass()
-	if it := item("it-series"); it.Href != "" {
-		t.Fatalf("still known on Davis: %+v", it)
+	removed := item("it-series").Removed
+	if len(removed) != 1 || removed[0].Line != "EXDATE;TZID=Europe/Paris:20261109T140000" {
+		t.Fatalf("date not in the trash: %+v", removed)
 	}
+	writeFeed("a.ics", invitationEvent("Soutenance (salle 12)", "ACCEPTED"), renamed("Series 2"))
+	pass()
+	if _, series = davisCopy("it-series"); len(ics.Events(series)) != 1 || ics.Value(ics.Events(series)[0], ical.PropSummary) != "Series 2" ||
+		len(exdates(series)) != 1 {
+		t.Fatalf("deleted date back, or the source's change lost:\n%s", ics.Encode(series))
+	}
+	if trash, err := st.Trash(ctx); err != nil || len(trash) != 1 || trash[0].UID != "it-series" {
+		t.Fatalf("trash %+v %v", trash, err)
+	}
+	if err := e.Restore(ctx, a.ID, "it-series", removed[0].Line); err != nil {
+		t.Fatal(err)
+	}
+	if _, series = davisCopy("it-series"); len(ics.Events(series)) != 2 || len(exdates(series)) != 0 || len(item("it-series").Removed) != 0 {
+		t.Fatalf("date not restored:\n%s", ics.Encode(series))
+	}
+
+	// The whole event deleted on Davis: in the trash, not brought back when the source changes it; restored, it is
+	// written again as the source has it now.
+	seriesHref := item("it-series").Href
+	if err := dc.Delete(ctx, seriesHref, ""); err != nil {
+		t.Fatal(err)
+	}
+	pass()
+	if it := item("it-series"); it.Href != "" || it.Trashed.IsZero() {
+		t.Fatalf("not in the trash: %+v", it)
+	}
+	writeFeed("a.ics", invitationEvent("Soutenance (salle 12)", "ACCEPTED"), renamed("Series 3"))
+	pass()
+	if _, err := dc.Get(ctx, seriesHref); !errors.Is(err, davis.ErrNotFound) {
+		t.Fatalf("brought back by the source's change: %v", err)
+	}
+	if err := e.Restore(ctx, a.ID, "it-series", ""); err != nil {
+		t.Fatal(err)
+	}
+	if it := item("it-series"); it.Href == "" || !it.Trashed.IsZero() {
+		t.Fatalf("not restored: %+v", it)
+	}
+	if _, series = davisCopy("it-series"); ics.Value(ics.Events(series)[0], ical.PropSummary) != "Series 3" {
+		t.Fatalf("restored out of date:\n%s", ics.Encode(series))
+	}
+	if trash, _ := st.Trash(ctx); len(trash) != 0 {
+		t.Fatalf("trash not empty: %+v", trash)
+	}
+	pass()
 	checkMine()
 
 	// 9. A second account in the same collection, invited to the same meeting on its own address: one copy only.

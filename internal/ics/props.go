@@ -68,3 +68,42 @@ func Zone(name string) *time.Location {
 	}
 	return loc
 }
+
+// ContentLine is p as one unfolded content line ("EXDATE;TZID=Europe/Paris:20261112T100000").
+func ContentLine(p *ical.Prop) string { return contentLine(p) }
+
+// Values are a date list's values (EXDATE, RDATE: several, comma-separated).
+func Values(p *ical.Prop) []string {
+	var out []string
+	for _, v := range strings.Split(p.Value, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// Instant names the time one value of p stands for (a RECURRENCE-ID, an EXDATE value), so that the same date
+// written two ways compares equal: the day for a date, the UTC time when its zone is UTC or a known one, else the
+// TZID and the value as written (a zone only its VTIMEZONE defines, as Outlook's "Romance Standard Time").
+func Instant(p *ical.Prop, v string) string {
+	if len(v) == 8 || strings.EqualFold(p.Params.Get(ical.ParamValue), string(ical.ValueDate)) {
+		return v
+	}
+	if strings.HasSuffix(v, "Z") {
+		if t, err := time.ParseInLocation(utcFormat, v, time.UTC); err == nil {
+			return t.Format(utcFormat)
+		}
+	}
+	tzid := p.Params.Get(ical.PropTimezoneID)
+	loc := Zone(tzid)
+	if strings.EqualFold(tzid, "UTC") {
+		loc = time.UTC
+	}
+	if loc != nil {
+		if t, err := time.ParseInLocation(localFormat, v, loc); err == nil {
+			return t.UTC().Format(utcFormat)
+		}
+	}
+	return tzid + ":" + v
+}

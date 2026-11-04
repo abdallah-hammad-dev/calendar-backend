@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/emersion/go-ical"
 	"golang.org/x/oauth2"
 
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/accounts"
@@ -122,6 +123,7 @@ func (s *Server) Handler(ctx context.Context) (http.Handler, error) {
 	mux.Handle("POST /accounts/{kind}/connect", s.auth(s.connect))
 	mux.Handle("GET "+CallbackPath, s.auth(s.callback))
 	mux.Handle("POST /accounts/{id}/remove", s.auth(s.remove))
+	mux.Handle("POST /trash/restore", s.auth(s.restore))
 	mux.Handle("POST /settings/{kind}", s.auth(s.saveProvider))
 	mux.Handle("POST /sync", s.auth(func(w http.ResponseWriter, r *http.Request) {
 		s.Engine.Wake()
@@ -217,6 +219,7 @@ type page struct {
 	Back          string // the error page's link back
 	Me            string // my address on Davis
 	Accounts      []row
+	Trash         []trashRow
 	Collections   []davis.Calendar
 	Google        provider
 	Microsoft     provider
@@ -246,10 +249,23 @@ type row struct {
 	SignInOver     bool
 }
 
+// trashRow is one thing in the trash (spec §5.4): an account's event I deleted, or one date of its series (Line).
+type trashRow struct {
+	AccountID int64
+	UID       string
+	Line      string // the date's EXDATE line; "" for the whole event
+	Title     string
+	When      string
+	Account   string
+	Deleted   string
+	at        time.Time
+}
+
 var notices = map[string]string{
 	"added":       "Compte ajouté : ses événements arrivent dans la collection choisie (la première fois peut prendre quelques minutes).",
 	"reconnected": "Compte reconnecté.",
 	"removed":     "Compte retiré.",
+	"restored":    "Restauré : il revient dans ton calendrier, à jour.",
 	"sync":        "Synchronisation lancée.",
 	"google-set":  "Connexion Google enregistrée : tu peux ajouter un compte Google.",
 	"google-set-reconnect": "Connexion Google enregistrée. Tes comptes Google ont été connectés avec l'ancien réglage : " +
@@ -296,7 +312,82 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		}
 		p.Accounts = append(p.Accounts, rw)
 	}
+	trash, err := s.Store.Trash(ctx)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	p.Trash = s.trashRows(trash, list)
 	s.render(w, http.StatusOK, "home", p)
+}
+
+// trashRows are the trash's events and dates, the last deleted first.
+func (s *Server) trashRows(items []store.Item, list []store.Account) []trashRow {
+	names := map[int64]string{}
+	for _, a := range list {
+		names[a.ID] = a.Name
+	}
+	var rows []trashRow
+	for _, it := range items {
+		title, start, series := "", (*ical.Prop)(nil), false
+		if cal, err := ics.Parse(it.SourceData); err == nil {
+			for _, ev := range ics.Events(cal) {
+				if ics.RecurrenceID(ev) == "" {
+					title, _ = ev.Props.Text(ical.PropSummary)
+					start = ev.Props.Get(ical.PropDateTimeStart)
+					series = ev.Props.Get(ical.PropRecurrenceRule) != nil || ev.Props.Get(ical.PropRecurrenceDates) != nil
+					break
+				}
+			}
+		}
+		if title == "" {
+			title = "(sans titre)"
+		}
+		base := trashRow{AccountID: it.AccountID, UID: it.UID, Title: title, Account: names[it.AccountID]}
+		if !it.Trashed.IsZero() {
+			r := base
+			if start != nil {
+				r.When = s.dateText(start, start.Value)
+			}
+			if series {
+				r.When = strings.TrimPrefix(r.When+" · se répète", " · ")
+			}
+			r.at, r.Deleted = it.Trashed, it.Trashed.In(s.Engine.Loc).Format("02/01/2006")
+			rows = append(rows, r)
+		}
+		for _, d := range it.Removed {
+			r := base
+			r.Line = d.Line
+			if p, err := ics.Line(d.Line); err == nil {
+				if v := ics.Values(p); len(v) > 0 {
+					r.When = s.dateText(p, v[0]) + " · une date de la série"
+				}
+			}
+			r.at, r.Deleted = d.At, d.At.In(s.Engine.Loc).Format("02/01/2006")
+			rows = append(rows, r)
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].at.After(rows[j].at) })
+	return rows
+}
+
+var weekdays = [...]string{"dim.", "lun.", "mar.", "mer.", "jeu.", "ven.", "sam."}
+
+// dateText says one date value as the page does, "mar. 10/11/2026 14:00" or the day alone: in the page's zone when
+// its own is known, else as written.
+func (s *Server) dateText(p *ical.Prop, v string) string {
+	key := ics.Instant(p, v)
+	if d, err := time.Parse("20060102", key); err == nil {
+		return weekdays[d.Weekday()] + " " + d.Format("02/01/2006")
+	}
+	if t, err := time.Parse("20060102T150405Z", key); err == nil {
+		t = t.In(s.Engine.Loc)
+		return weekdays[t.Weekday()] + " " + t.Format("02/01/2006 15:04")
+	}
+	if t, err := time.Parse("20060102T150405", key[strings.LastIndex(key, ":")+1:]); err == nil {
+		return weekdays[t.Weekday()] + " " + t.Format("02/01/2006 15:04")
+	}
+	return v
 }
 
 func (s *Server) provider(ctx context.Context, kind string, list []store.Account) (provider, error) {
@@ -576,6 +667,20 @@ func (s *Server) remove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/?ok=removed", http.StatusSeeOther)
+}
+
+// restore takes an event, or one date of its series, out of the trash: written again in my calendar, up to date.
+func (s *Server) restore(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PostFormValue("account"), 10, 64)
+	err := s.Engine.Restore(r.Context(), id, r.PostFormValue("uid"), r.PostFormValue("date"))
+	if errors.Is(err, store.ErrNotFound) {
+		s.problem(w, "Cet événement n'est plus là : son organisateur l'a supprimé, ou son compte a été retiré.")
+		return
+	} else if err != nil {
+		s.problem(w, "Impossible de le restaurer : "+err.Error())
+		return
+	}
+	http.Redirect(w, r, "/?ok=restored#corbeille", http.StatusSeeOther)
 }
 
 // --- rendering

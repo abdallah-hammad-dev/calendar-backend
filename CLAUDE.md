@@ -65,15 +65,16 @@ backend must write. This repo is private.
   (`settings` row `oauth_client_<kind>`), swapped at run time under a lock.
 - `internal/htmltext` — HTML descriptions to plain text, keeping link targets.
 - `internal/web` — the accounts page (templates embedded, French): login, add / sign in again / remove, sync now,
-  the OAuth clients (`/settings/{kind}`), the public `/privacy` page Google asks for.
-- `internal/mirror` — `Base` (spec §5.2's rules common to every account), `Merge` (keeps what clients add), the
+  the trash and its Restaurer, the OAuth clients (`/settings/{kind}`), the public `/privacy` page Google asks for.
+- `internal/mirror` — `Base` (spec §5.2's rules common to every account), `Merge` (keeps what clients add),
+  `trash.go` (spec §5.4: dates a client deleted, written back on every copy until restored; `Engine.Restore`), the
   `Engine` (pass = each collection accounts write into read once, then each source; answers in flight; one copy
   of a meeting two accounts are invited to). Accounts write into a collection the user chose, shared with their
   own items: the engine touches only the hrefs in `items`.
 - `internal/store` — SQLite (modernc, no cgo): `accounts` (with their collection), `collections` (sync tokens),
-  `items` (source data, Davis href/etag, partstat written, answer in flight, what the relay sent and wrote),
-  `settings` (the page's session key). Migrations by `PRAGMA user_version` (`schema.sql`, `schema2.sql`); never
-  edit one once deployed (not deployed yet).
+  `items` (source data, Davis href/etag, partstat written, answer in flight, what the relay sent and wrote, the
+  trash: `trashed`, `removed` dates), `settings` (the page's session key). Migrations by `PRAGMA user_version`
+  (`schema.sql`, `schema2.sql`, `schema3.sql`); deployed: never edit one, add the next.
 - `deploy/` — the VPS's `compose.yaml` (Caddy, Davis, backend, CouchDB), `Caddyfile`, `couchdb.ini` (LiveSync's
   settings; owned by CouchDB's uid 5984 on the VPS, or its entrypoint fails), `update` (CI's only command).
 

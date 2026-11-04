@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -17,10 +18,12 @@ var (
 	schemaV1 string
 	//go:embed schema2.sql
 	schemaV2 string
+	//go:embed schema3.sql
+	schemaV3 string
 )
 
 // migrations[i] takes the database from version i to i+1 (PRAGMA user_version).
-var migrations = []string{schemaV1, schemaV2}
+var migrations = []string{schemaV1, schemaV2, schemaV3}
 
 var ErrNotFound = errors.New("store: not found")
 
@@ -186,21 +189,42 @@ type Item struct {
 	Sent       string    // the answer the relay sent, or failed to send for good ("" = none yet)
 	SentAt     time.Time // when the provider took Sent (zero when it failed)
 	RSVPState  string    // the X-CALTASKS-RSVP-STATE last written on the Davis copy
+	Trashed    time.Time // when I deleted the copy on Davis (zero = not in the trash): not written again until restored
+	Removed    []Removed // dates I deleted from the series on Davis, written back on every copy until restored
+}
+
+// Removed is one date I deleted from a series: the EXDATE a client added, with one value.
+type Removed struct {
+	Line string    `json:"line"` // "EXDATE;TZID=Europe/Paris:20261112T100000"
+	At   time.Time `json:"at"`   // when it was seen
 }
 
 const itemCols = `account_id, uid, source_id, invited, source_data, href, etag, base_hash, partstat, answer, sent,
-	sent_at, rsvp_state`
+	sent_at, rsvp_state, trashed, removed`
 
 func scanItem(row interface{ Scan(...any) error }) (Item, error) {
 	var it Item
-	var sentAt string
+	var sentAt, trashed, removed string
 	err := row.Scan(&it.AccountID, &it.UID, &it.SourceID, &it.Invited, &it.SourceData, &it.Href, &it.ETag, &it.BaseHash,
-		&it.Partstat, &it.Answer, &it.Sent, &sentAt, &it.RSVPState)
+		&it.Partstat, &it.Answer, &it.Sent, &sentAt, &it.RSVPState, &trashed, &removed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return it, ErrNotFound
 	}
 	it.SentAt, _ = time.Parse(time.RFC3339, sentAt)
+	it.Trashed, _ = time.Parse(time.RFC3339, trashed)
+	if removed != "" {
+		if jerr := json.Unmarshal([]byte(removed), &it.Removed); jerr != nil && err == nil {
+			err = fmt.Errorf("store: item %s: removed dates: %w", it.UID, jerr)
+		}
+	}
 	return it, err
+}
+
+func timeText(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 func (s *Store) Item(ctx context.Context, accountID int64, uid string) (Item, error) {
@@ -220,24 +244,20 @@ func (s *Store) ItemByHref(ctx context.Context, href string) (Item, error) {
 
 // ItemsByUID lists the copies of one event, one per account that has it (I may be invited on several addresses).
 func (s *Store) ItemsByUID(ctx context.Context, uid string) ([]Item, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+itemCols+` FROM items WHERE uid = ? ORDER BY account_id`, uid)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Item
-	for rows.Next() {
-		it, err := scanItem(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, it)
-	}
-	return out, rows.Err()
+	return s.items(ctx, `SELECT `+itemCols+` FROM items WHERE uid = ? ORDER BY account_id`, uid)
 }
 
 func (s *Store) Items(ctx context.Context, accountID int64) ([]Item, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+itemCols+` FROM items WHERE account_id = ? ORDER BY uid`, accountID)
+	return s.items(ctx, `SELECT `+itemCols+` FROM items WHERE account_id = ? ORDER BY uid`, accountID)
+}
+
+// Trash lists the items in the trash, whole or some of their dates, every account's.
+func (s *Store) Trash(ctx context.Context) ([]Item, error) {
+	return s.items(ctx, `SELECT `+itemCols+` FROM items WHERE trashed != '' OR removed != '' ORDER BY account_id, uid`)
+}
+
+func (s *Store) items(ctx context.Context, query string, args ...any) ([]Item, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -254,17 +274,22 @@ func (s *Store) Items(ctx context.Context, accountID int64) ([]Item, error) {
 }
 
 func (s *Store) PutItem(ctx context.Context, it Item) error {
-	sentAt := ""
-	if !it.SentAt.IsZero() {
-		sentAt = it.SentAt.UTC().Format(time.RFC3339)
+	removed := ""
+	if len(it.Removed) > 0 {
+		b, err := json.Marshal(it.Removed)
+		if err != nil {
+			return err
+		}
+		removed = string(b)
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO items (`+itemCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO items (`+itemCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (account_id, uid) DO UPDATE SET source_id = excluded.source_id, invited = excluded.invited,
 		source_data = excluded.source_data,
 		href = excluded.href, etag = excluded.etag, base_hash = excluded.base_hash, partstat = excluded.partstat,
-		answer = excluded.answer, sent = excluded.sent, sent_at = excluded.sent_at, rsvp_state = excluded.rsvp_state`,
+		answer = excluded.answer, sent = excluded.sent, sent_at = excluded.sent_at, rsvp_state = excluded.rsvp_state,
+		trashed = excluded.trashed, removed = excluded.removed`,
 		it.AccountID, it.UID, it.SourceID, it.Invited, it.SourceData, it.Href, it.ETag, it.BaseHash, it.Partstat, it.Answer,
-		it.Sent, sentAt, it.RSVPState)
+		it.Sent, timeText(it.SentAt), it.RSVPState, timeText(it.Trashed), removed)
 	return err
 }
 

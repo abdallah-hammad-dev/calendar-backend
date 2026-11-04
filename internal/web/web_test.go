@@ -374,3 +374,43 @@ func TestSignInAgainstDavis(t *testing.T) {
 		t.Fatal("still there")
 	}
 }
+
+// The trash on the page: an event and a date of a series I deleted, the last first; restoring what is gone says so.
+func TestTrash(t *testing.T) {
+	ctx := context.Background()
+	e := setup(t, offline(t), "/dav/calendars/abd/", "abd@bench.test", nil)
+	e.login(t)
+	if _, body := e.get(t, "/"); !strings.Contains(body, "Corbeille") || !strings.Contains(body, "Vide.") {
+		t.Fatal("no empty trash on the page")
+	}
+	id, err := e.store.AddAccount(ctx, store.Account{Kind: "ics", Name: "École", Address: "me@school.fr", Config: "{}",
+		Collection: "/dav/calendars/abd/ecole/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := func(uid, summary, start, rule string) string {
+		return strings.ReplaceAll("BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:x\nBEGIN:VEVENT\nUID:"+uid+"\nDTSTAMP:20261020T080000Z\nSUMMARY:"+
+			summary+"\nDTSTART:"+start+"\n"+rule+"END:VEVENT\nEND:VCALENDAR\n", "\n", "\r\n")
+	}
+	deleted := time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC)
+	for _, it := range []store.Item{
+		{AccountID: id, UID: "one", SourceData: src("one", "Soutenance\\, salle 12", "20261123T090000Z", ""), Trashed: deleted},
+		{AccountID: id, UID: "weekly", SourceData: src("weekly", "Cours réseau", "20261102T130000Z", "RRULE:FREQ=WEEKLY\n"), Href: "/dav/calendars/abd/ecole/weekly.ics",
+			Removed: []store.Removed{{Line: "EXDATE;TZID=Europe/Paris:20261110T140000", At: deleted.Add(time.Hour)}}},
+	} {
+		if err := e.store.PutItem(ctx, it); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, body := e.get(t, "/")
+	date, event := strings.Index(body, "mar. 10/11/2026 14:00 · une date de la série · École"), strings.Index(body, "lun. 23/11/2026 10:00 · École · supprimé le 04/11/2026")
+	if date < 0 || event < 0 || date > event || !strings.Contains(body, "Soutenance, salle 12") ||
+		!strings.Contains(body, `name="date" value="EXDATE;TZID=Europe/Paris:20261110T140000"`) {
+		t.Fatalf("trash rows:\n%s", body)
+	}
+	resp := e.post(t, "/trash/restore", url.Values{"account": {fmt.Sprint(id)}, "uid": {"gone"}})
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(b), "plus là") {
+		t.Fatalf("restoring what is gone: %s\n%s", resp.Status, b)
+	}
+}

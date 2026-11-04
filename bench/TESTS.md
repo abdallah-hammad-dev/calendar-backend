@@ -169,7 +169,8 @@ sur l'iPhone), dans une collection jetable supprimée à la fin.
 | Réponse « depuis l'iPhone » (`PARTSTAT=ACCEPTED`, paramètres réécrits comme iOS, un `VALARM` ajouté) | ✅ vue par le backend, gardée quand la source change le titre (réponse « en vol »), oubliée quand la source la montre ; l'alarme est gardée |
 | Un client renomme un événement miroir | ✅ la source l'emporte à la passe suivante |
 | Événement retiré de la source | ✅ supprimé sur Davis |
-| Événement supprimé sur Davis | Oublié, pas recréé tant que la source ne le change pas (provisoire, spec §11) |
+| Événement supprimé sur Davis | ✅ (2026-11-04) à la corbeille : pas recréé même quand la source le change ; restauré, il revient à jour (spec §5.4) |
+| Une date d'une série supprimée sur Davis (`EXDATE` dans la forme du maître, son exception retirée, comme iOS et l'extension) | ✅ (2026-11-04) gardée supprimée quand la source change la série ; restaurée, la date revient avec son exception |
 | Passe sans changement | ✅ rien n'est réécrit (même ETag) |
 
 (2026-10-22) Les propriétés partagées avec l'extension portent maintenant le préfixe `X-CALTASKS-`

@@ -275,3 +275,30 @@ func TestProps(t *testing.T) {
 		t.Fatal("UTC, unknown or empty zone loaded")
 	}
 }
+
+func TestInstant(t *testing.T) {
+	p := func(line string) *ical.Prop {
+		t.Helper()
+		pr, err := Line(line)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pr
+	}
+	for _, c := range []struct{ line, want string }{
+		{"EXDATE:20261106T090000Z", "20261106T090000Z"},
+		{"EXDATE;TZID=Europe/Paris:20261106T100000", "20261106T090000Z"},
+		{"RECURRENCE-ID;TZID=UTC:20261106T090000", "20261106T090000Z"},
+		{"EXDATE;VALUE=DATE:20261106", "20261106"},
+		{"EXDATE;TZID=Romance Standard Time:20261106T100000", "Romance Standard Time:20261106T100000"},
+		{"EXDATE:20261106T100000", ":20261106T100000"},
+	} {
+		pr := p(c.line)
+		if got := Instant(pr, Values(pr)[0]); got != c.want {
+			t.Errorf("%s: %q, want %q", c.line, got, c.want)
+		}
+	}
+	if v := Values(p("EXDATE:20261106T090000Z,20261113T090000Z")); len(v) != 2 {
+		t.Fatalf("values %q", v)
+	}
+}

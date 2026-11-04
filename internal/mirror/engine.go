@@ -304,6 +304,10 @@ func (e *Engine) upsert(ctx context.Context, a store.Account, ch adapter.Change)
 			it.Answer, it.Sent = "", ""
 		}
 	}
+	it.Removed = StillRemoved(ch.Calendar, it.Removed)
+	if !it.Trashed.IsZero() {
+		return e.Store.PutItem(ctx, it) // in the trash: kept up to date for a restore, not written (spec §5.4)
+	}
 	if it.Href == "" {
 		// Invited on two addresses whose accounts write into the same collection: one copy (Davis takes two items
 		// with the same UID, and shows both). The first account keeps it; this one waits, recorded unwritten
@@ -321,14 +325,15 @@ func (e *Engine) upsert(ctx context.Context, a store.Account, ch adapter.Change)
 }
 
 // copiedByOther tells whether another account writing into a's collection has its copy of uid there, or had one
-// that I deleted on Davis (not to be brought back through this account either).
+// that I deleted on Davis (in the trash, or forgotten before the trash: not to be brought back through this account
+// either).
 func (e *Engine) copiedByOther(ctx context.Context, a store.Account, uid string) (bool, error) {
 	others, err := e.Store.ItemsByUID(ctx, uid)
 	if err != nil {
 		return false, err
 	}
 	for _, o := range others {
-		if o.AccountID == a.ID || o.BaseHash == "" { // itself, or another one waiting
+		if o.AccountID == a.ID || (o.BaseHash == "" && o.Trashed.IsZero()) { // itself, or another one waiting
 			continue
 		}
 		oa, err := e.Store.Account(ctx, o.AccountID)
@@ -342,19 +347,25 @@ func (e *Engine) copiedByOther(ctx context.Context, a store.Account, uid string)
 	return false, nil
 }
 
-// handOver writes the copy of uid an account was holding back (see upsert) once the copy it deferred to is gone.
-func (e *Engine) handOver(ctx context.Context, collection, uid string) error {
+// handOver writes the copy of uid an account was holding back (see upsert) once the copy it deferred to is gone
+// from its source; when that copy was in the trash (trashed not zero), the one held back takes its place there.
+func (e *Engine) handOver(ctx context.Context, collection, uid string, trashed time.Time) error {
 	waiting, err := e.Store.ItemsByUID(ctx, uid)
 	if err != nil {
 		return err
 	}
 	for _, it := range waiting {
-		if it.Href != "" || it.BaseHash != "" {
+		if it.Href != "" || it.BaseHash != "" || !it.Trashed.IsZero() {
 			continue // written, or deleted by me on Davis (not brought back)
 		}
 		a, err := e.Store.Account(ctx, it.AccountID)
 		if err != nil || a.Collection != collection {
 			continue
+		}
+		if !trashed.IsZero() {
+			it.Trashed = trashed
+			e.Log.Info("trash handed over", "account", a.ID, "uid", uid)
+			return e.Store.PutItem(ctx, it)
 		}
 		e.Log.Info("copy handed over", "account", a.ID, "uid", uid)
 		return e.write(ctx, a, &it, nil)
@@ -373,9 +384,11 @@ func (e *Engine) invited(a store.Account, it store.Item) string {
 // what clients added to the copy. cur is the Davis copy when the caller already has it.
 //
 // Nothing is written when the source gave nothing new and the copy wasn't changed on Davis since the last write
-// (the Davis watch passes changed copies in as cur). An event deleted on Davis stays deleted until the source
-// changes it (spec §11 is open on what deleting a mirrored invitation should mean).
+// (the Davis watch passes changed copies in as cur). Nothing is written for an item in the trash (spec §5.4).
 func (e *Engine) write(ctx context.Context, a store.Account, it *store.Item, cur *davis.Item) error {
+	if !it.Trashed.IsZero() {
+		return e.Store.PutItem(ctx, *it)
+	}
 	if cur == nil {
 		_, hash, err := e.base(a, it)
 		if err != nil {
@@ -463,6 +476,7 @@ func (e *Engine) base(a store.Account, it *store.Item) (*ical.Calendar, string, 
 		return nil, "", err
 	}
 	base := Base(src, e.invited(a, *it), it.Answer, e.target(a))
+	HideOccurrences(base, removedLines(it.Removed))
 	SetRSVPState(base, e.Me, it.RSVPState)
 	return base, Hash(ics.Encode(base)), nil
 }
@@ -493,6 +507,70 @@ func (e *Engine) observe(a store.Account, it *store.Item, got davis.Item) {
 		e.Log.Info("answer made on Davis", "account", a.ID, "uid", it.UID, "partstat", p)
 		it.Answer, it.Sent, it.SentAt, it.RSVPState = p, "", time.Time{}, "" // the state said how the last one went
 	}
+}
+
+// removedOn puts into the trash the dates a client deleted from the series on a Davis copy that changed since the
+// backend wrote it: EXDATEs the copy built from the source doesn't have. Called before the source can have changed
+// (Watch runs first in a pass), so an EXDATE there that the build lacks is a client's.
+func (e *Engine) removedOn(a store.Account, it *store.Item, got davis.Item) {
+	cur, err := ics.Parse(got.Data)
+	if err != nil {
+		return
+	}
+	base, _, err := e.base(a, it)
+	if err != nil {
+		return
+	}
+	for _, line := range AddedExdates(base, cur) {
+		e.Log.Info("date deleted on Davis: in the trash", "account", a.ID, "uid", it.UID)
+		it.Removed = append(it.Removed, store.Removed{Line: line, At: e.now()})
+	}
+}
+
+func removedLines(removed []store.Removed) []string {
+	out := make([]string, len(removed))
+	for i, r := range removed {
+		out[i] = r.Line
+	}
+	return out
+}
+
+// Restore takes an item out of the trash and writes its copy again, up to date: the whole event when line is "",
+// else that date of its series (one of its Removed lines).
+func (e *Engine) Restore(ctx context.Context, accountID int64, uid, line string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	it, err := e.Store.Item(ctx, accountID, uid)
+	if err != nil {
+		return err
+	}
+	a, err := e.Store.Account(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if line == "" {
+		if it.Trashed.IsZero() {
+			return nil
+		}
+		it.Trashed, it.BaseHash = time.Time{}, "" // no hash: written whatever the last one was
+		e.Log.Info("restored", "account", a.ID, "uid", uid)
+	} else {
+		kept := it.Removed[:0:0]
+		for _, r := range it.Removed {
+			if r.Line != line {
+				kept = append(kept, r)
+			}
+		}
+		if len(kept) == len(it.Removed) {
+			return nil
+		}
+		it.Removed = kept
+		e.Log.Info("date restored", "account", a.ID, "uid", uid)
+		if it.Href == "" { // the event itself isn't on Davis (in the trash, or waiting): the date comes back with it
+			return e.Store.PutItem(ctx, it)
+		}
+	}
+	return e.write(ctx, a, &it, nil)
 }
 
 // Relay sends the account's answers made on Davis that it hasn't sent yet, and writes where each stands on its
@@ -553,15 +631,16 @@ func (e *Engine) remove(ctx context.Context, a store.Account, uid string) error 
 	if err := e.Store.DeleteItem(ctx, a.ID, uid); err != nil {
 		return err
 	}
-	if it.Href != "" {
-		return e.handOver(ctx, a.Collection, uid)
+	if it.Href != "" || !it.Trashed.IsZero() {
+		return e.handOver(ctx, a.Collection, uid, it.Trashed)
 	}
 	return nil
 }
 
 // Watch reads what changed in a collection that accounts write into since the last pass: my answers on their
-// events, and edits a client made that the source's version replaces (mirrored events are read-only except my
-// PARTSTAT, spec §5.1). Everything else there (my own events and tasks) is left alone.
+// events, copies or dates I deleted (into the trash, spec §5.4), and edits a client made that the source's version
+// replaces (mirrored events are read-only except my PARTSTAT and deleting, spec §5.1). Everything else there (my
+// own events and tasks) is left alone.
 func (e *Engine) Watch(ctx context.Context, coll string, accounts []store.Account) error {
 	token, err := e.Store.CollectionToken(ctx, coll)
 	if err != nil {
@@ -596,6 +675,7 @@ func (e *Engine) Watch(ctx context.Context, coll string, accounts []store.Accoun
 			}
 		}
 		e.observe(a, &it, item)
+		e.removedOn(a, &it, item)
 		if err := e.write(ctx, a, &it, &item); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", it.UID, err))
 		}
@@ -627,8 +707,8 @@ func (e *Engine) Watch(ctx context.Context, coll string, accounts []store.Accoun
 		} else if err != nil {
 			return err
 		}
-		e.Log.Info("copy deleted on Davis", "account", it.AccountID, "uid", it.UID, "href", href)
-		it.Href, it.ETag = "", ""
+		e.Log.Info("copy deleted on Davis: in the trash", "account", it.AccountID, "uid", it.UID, "href", href)
+		it.Href, it.ETag, it.Trashed = "", "", e.now()
 		if err := e.Store.PutItem(ctx, it); err != nil {
 			return err
 		}
