@@ -276,15 +276,11 @@ func TestTasksAgainstDavis(t *testing.T) {
 	if len(components(h.raw(uid, ical.CompToDo).cal, ical.CompTimezone)) != 1 {
 		t.Fatal("no VTIMEZONE for the TZID")
 	}
-	done := h.ok("task_update", map[string]any{"task": "Rendre le TP", "done": true})
-	if done["done"] != "ticked" || !strings.Contains(done["later"].(string), "next date") {
-		t.Fatalf("ticked: %v", done)
-	}
-	if got := items(h.ok("tasks_list", map[string]any{"status": "done", "collection": h.names["ecole"]}), "tasks"); len(got) != 1 ||
+	if got := items(h.ok("tasks_list", map[string]any{"query": "Rendre le TP", "collection": h.names["ecole"]}), "tasks"); len(got) != 1 ||
 		got[0]["repeat"] != "FREQ=WEEKLY;UNTIL=20261231" {
-		t.Fatalf("done list: %v", got)
+		t.Fatalf("repeat read back: %v", got)
 	}
-	h.ok("task_update", map[string]any{"task": uid, "done": false, "collection": h.names["general"]})
+	h.ok("task_update", map[string]any{"task": uid, "collection": h.names["general"]})
 	if it := h.raw(uid, ical.CompToDo); !davis.SamePath(it.coll.Href, h.cols["general"].Href) {
 		t.Fatalf("not moved: %s", it.coll.Href)
 	}
@@ -417,7 +413,8 @@ END:VCALENDAR
 
 func TestVaultTools(t *testing.T) {
 	h := newHarness(t)
-	h.put("Tasks/Acheter du pain.md", "---\ntype: task\ncaldav_uid: t-1\ndone: false\ndue: 2026-11-20\n---\nla boulangerie\n")
+	pain := h.ok("task_create", map[string]any{"title": "Acheter du pain", "collection": h.names["general"]})["uid"].(string)
+	h.put("Tasks/Acheter du pain.md", "---\ntype: task\ncaldav_uid: "+pain+"\ndone: false\ndue: 2026-11-20\n---\nla boulangerie\n")
 	h.put("Journal/2026-11-04.md", "- [[Acheter du pain]]\n- voir [[Idée]]\n")
 
 	w := h.ok("vault_write", map[string]any{"path": "Projets/Idée.md", "content": "# Idée\n\nUn plan.\n"})
@@ -436,7 +433,7 @@ func TestVaultTools(t *testing.T) {
 
 	// A task note: the body is free, the rest is the task's.
 	tr := h.ok("vault_read", map[string]any{"path": "Tasks/Acheter du pain.md"})
-	if tr["kind"] != "task" || tr["uid"] != "t-1" {
+	if tr["kind"] != "task" || tr["uid"] != pain {
 		t.Fatalf("task note: %v", tr)
 	}
 	h.ok("vault_edit", map[string]any{"path": "Tasks/Acheter du pain.md", "oldText": "la boulangerie", "newText": "la boulangerie du coin"})
@@ -485,5 +482,100 @@ func TestVaultTools(t *testing.T) {
 	shown := h.ok("vault_restore", map[string]any{"id": undo, "show": true})
 	if !strings.Contains(shown["content"].(map[string]any)["Tasks/Acheter du pain.md"].(string), "la boulangerie\n") {
 		t.Fatalf("show: %v", shown)
+	}
+}
+
+// What used to wait for an Obsidian to open (2026-11-05, the user: "pk je dois ouvrir obsidian pr la syncro?"): a
+// task's text before its note exists, a task deleted with its note, a repeating task ticked. Dates are around today.
+func TestTasksWithoutObsidianAgainstDavis(t *testing.T) {
+	h := newHarness(t)
+	now := time.Now().In(paris)
+	day := func(d int) string { return now.AddDate(0, 0, d).Format(dayLayout) }
+	gen := h.names["general"]
+
+	// The text, while there is no note: read and changed in the reminder's notes.
+	uid := h.ok("task_create", map[string]any{"title": "Traduire le casier", "collection": gen,
+		"notes": "- [ ] Demander à Iris\n- [ ] Traduire"})["uid"].(string)
+	h.ok("task_update", map[string]any{"task": "Traduire le casier", "notes": "- [ ] Traduire\n- [ ] Envoyer"})
+	got := items(h.ok("tasks_list", map[string]any{"query": "casier"}), "tasks")
+	if len(got) != 1 || got[0]["notes"] != "- [ ] Traduire\n- [ ] Envoyer" {
+		t.Fatalf("notes: %v", got)
+	}
+	// An Obsidian made the note (its link is on the reminder), not here yet: refused, the edit would be lost.
+	it := h.raw(uid, ical.CompToDo)
+	td := master(it.cal, ical.CompToDo)
+	td.Props.Set(ics.Prop(ical.PropURL, linkPrefix+"vault=v&uid="+uid))
+	if _, err := h.c.Davis.Put(h.ctx, it.Href, ics.Encode(it.cal), it.ETag); err != nil {
+		t.Fatal(err)
+	}
+	h.refused("task_update", map[string]any{"task": uid, "notes": "x"}, "on its way")
+	h.put("Tasks/Traduire le casier.md", "---\ntype: task\ncaldav_uid: "+uid+"\ndone: false\n---\n- [ ] Traduire\n")
+	h.refused("task_update", map[string]any{"task": uid, "notes": "x"}, "vault_edit")
+	if got := items(h.ok("tasks_list", map[string]any{"query": "casier"}), "tasks"); got[0]["notes"] != nil ||
+		got[0]["note"] != "Tasks/Traduire le casier.md" {
+		t.Fatalf("with its note: %v", got)
+	}
+
+	// A whole-day repeating task ticked: back at once for its next date after today, the tick in its note.
+	bin := h.ok("task_create", map[string]any{"title": "Sortir les poubelles", "collection": gen, "due": day(-1),
+		"repeat": "FREQ=WEEKLY"})["uid"].(string)
+	h.put("Tasks/Sortir les poubelles.md", "---\ntype: task\ndone: false\ndue: "+day(-1)+"\nrepeat: every week\n"+
+		"completions:\n  - 2026-10-01T20:00\ncaldav_uid: "+bin+"\n---\nLe mardi soir.\n")
+	tick := h.ok("task_update", map[string]any{"task": bin, "done": true})
+	if tick["due"] != day(6) || !strings.HasPrefix(tick["done"].(string), "ticked") {
+		t.Fatalf("ticked: %v", tick)
+	}
+	td = master(h.raw(bin, ical.CompToDo).cal, ical.CompToDo)
+	if ics.Value(td, ical.PropDue) != strings.ReplaceAll(day(6), "-", "") || td.Props.Get(ical.PropCompleted) != nil ||
+		!strings.EqualFold(ics.Value(td, ical.PropStatus), "NEEDS-ACTION") {
+		t.Fatalf("moved on: %s", ics.Encode(h.raw(bin, ical.CompToDo).cal))
+	}
+	want := "---\ntype: task\ndone: false\ndue: " + day(6) + "\nrepeat: every week\ncompletions:\n  - 2026-10-01T20:00\n  - " +
+		now.Format(dayLayout) + "T"
+	if note := h.file("Tasks/Sortir les poubelles.md"); !strings.HasPrefix(note, want) || !strings.HasSuffix(note, "\n---\nLe mardi soir.\n") {
+		t.Fatalf("its note:\n%s", note)
+	}
+
+	// Timed, its last day included; past it, ticked for good.
+	next := day(0) + "T08:00"
+	if now.Hour() >= 8 {
+		next = day(1) + "T08:00"
+	}
+	tick = h.ok("task_update", map[string]any{"task": h.ok("task_create", map[string]any{"title": "Arroser", "collection": gen,
+		"due": day(-1) + "T08:00", "repeat": "FREQ=DAILY;UNTIL=" + strings.ReplaceAll(day(1), "-", "")})["uid"], "done": true})
+	if tick["due"] != next {
+		t.Fatalf("timed: %v, want %s", tick, next)
+	}
+	tick = h.ok("task_update", map[string]any{"task": h.ok("task_create", map[string]any{"title": "Fini", "collection": gen,
+		"due": day(-2), "repeat": "FREQ=DAILY;UNTIL=" + strings.ReplaceAll(day(-1), "-", "")})["uid"], "done": true})
+	if tick["due"] != nil || !strings.Contains(tick["later"].(string), "last time") {
+		t.Fatalf("ended: %v", tick)
+	}
+	if got := items(h.ok("tasks_list", map[string]any{"status": "done", "collection": gen}), "tasks"); len(got) != 1 || got[0]["title"] != "Fini" {
+		t.Fatalf("done: %v", got)
+	}
+
+	// Deleted with its note; the note comes back unlinked.
+	h.refused("vault_delete", map[string]any{"path": "Tasks/Traduire le casier.md"}, "deleteNote")
+	del := h.ok("task_delete", map[string]any{"task": uid, "deleteNote": true})
+	if del["note"] != "Tasks/Traduire le casier.md" || del["restoreId"] == nil || h.c.Vault.Exists("Tasks/Traduire le casier.md") {
+		t.Fatalf("deleted: %v", del)
+	}
+	if _, err := h.c.find(h.ctx, uid, ical.CompToDo); err == nil {
+		t.Fatal("its reminder is still there")
+	}
+	h.ok("vault_restore", map[string]any{"id": del["restoreId"]})
+	if note := h.file("Tasks/Traduire le casier.md"); note != "---\ntype: task\ndone: true\n---\n- [ ] Traduire\n" {
+		t.Fatalf("restored: %q", note)
+	}
+
+	// Its reminder deleted on the phone: the note still linked can go.
+	it = h.raw(bin, ical.CompToDo)
+	if err := h.c.Davis.Delete(h.ctx, it.Href, it.ETag); err != nil {
+		t.Fatal(err)
+	}
+	h.ok("vault_delete", map[string]any{"path": "Tasks/Sortir les poubelles.md"})
+	if d := h.ok("task_delete", map[string]any{"task": "Arroser", "deleteNote": true}); d["done"] != "deleted (it had no note yet: none will be made)" {
+		t.Fatalf("no note: %v", d)
 	}
 }

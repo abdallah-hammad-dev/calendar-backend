@@ -77,7 +77,9 @@ backend must write. This repo is private.
 - `internal/connector` — the MCP server (official Go SDK, stateless streamable HTTP): `calendar.go` (collections,
   events, free slots, rsvp; `calendar-query` with `expand`), `tasks.go` (VTODOs as the extension writes them, the
   note name it will give), `notes.go` (the vault tools, task / event notes' Davis-owned properties guarded),
-  `ical.go`. Logs: tool, outcome, ms, UIDs; never contents, inputs, outputs or note paths.
+  `ical.go`. Logs: tool, outcome, ms, UIDs; never contents, inputs, outputs or note paths. Nothing waits for an
+  Obsidian to open (2026-11-05): a task's text before its note exists, a repeating task moved on (its note's
+  `completions` too, `vault.EditProps`), a task deleted with its note.
 - `internal/vault` — the vault on disk (`VAULT_DIR`: `notes/` = the bridge's folder, `history/`, `trash/`,
   `tmp/`), all through `os.Root`: atomic writes, versions, history (30 days) and trash, link rewriting on a move
   (`links.go`), frontmatter (`meta.go`). A file in a new folder, and every moved file, is written again 3 s later:

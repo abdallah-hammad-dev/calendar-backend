@@ -266,3 +266,42 @@ func TestRetouch(t *testing.T) {
 		t.Fatalf("moved file: %q", data)
 	}
 }
+
+// A repeating task moved on, as the extension's processFrontMatter writes it (TaskSync.moveOn): the keys edited in
+// place, the rest as it was, days and times plain.
+func TestEditProps(t *testing.T) {
+	note := "---\ntype: task\ndone: false\ndue: 2026-11-10\nrepeat: every tuesday\ntags:\n  - atlas\nparent: \"[[Projet]]\"\n" +
+		"completed: 2026-11-10T09:00\ncaldav_uid: u-1\n---\n# Corps\n\n- [ ] une étape\n"
+	got, err := EditProps(note,
+		Edit{Key: "done", Value: false},
+		Edit{Key: "due", Value: "2026-11-17"},
+		Edit{Key: "completed", Delete: true},
+		Edit{Key: "completions", Value: "2026-11-10T09:00", Append: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\ntype: task\ndone: false\ndue: 2026-11-17\nrepeat: every tuesday\ntags:\n  - atlas\nparent: \"[[Projet]]\"\n" +
+		"caldav_uid: u-1\ncompletions:\n  - 2026-11-10T09:00\n---\n# Corps\n\n- [ ] une étape\n"
+	if got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+	again, _ := EditProps(got, Edit{Key: "completions", Value: "2026-11-17T08:30", Append: true})
+	if !strings.Contains(again, "completions:\n  - 2026-11-10T09:00\n  - 2026-11-17T08:30\n---") {
+		t.Fatalf("appended: %s", again)
+	}
+	one, _ := EditProps("---\ncompletions: 2026-11-03\n---\n", Edit{Key: "completions", Value: "2026-11-10", Append: true})
+	if one != "---\ncompletions:\n  - 2026-11-03\n  - 2026-11-10\n---\n" {
+		t.Fatalf("one value: %q", one)
+	}
+	unlinked, _ := EditProps("---\ntype: task\ncaldav_uid: u\ncollection: Général\n---\nb", Edit{Key: "done", Value: true},
+		Edit{Key: "caldav_uid", Delete: true}, Edit{Key: "collection", Delete: true})
+	if unlinked != "---\ntype: task\ndone: true\n---\nb" {
+		t.Fatalf("unlinked: %q", unlinked)
+	}
+	if m := ReadMeta([]byte(got)); m.UID != "u-1" || !m.Task() {
+		t.Fatalf("reads back: %+v", m)
+	}
+	if _, err := EditProps("---\n- a\n---\n", Edit{Key: "done", Value: true}); err == nil {
+		t.Fatal("a list as properties")
+	}
+}

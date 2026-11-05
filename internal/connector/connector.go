@@ -80,7 +80,8 @@ does in their vault: read before you change, keep their folders, structure and s
 - A task is a reminder: make it with task_create, never by writing a note. The extension makes its note (in
   "%[1]s/", named after the title, task_create's notes as its body) at its next sync. task_create returns its link:
   put it where it belongs, as a line "- [[Title]]" (drawn with its checkbox) or inline. The link resolves once the
-  note exists.
+  note exists. Until then the task's text is its reminder's notes: tasks_list shows them, task_update (notes)
+  changes them; afterwards it is the note's body (vault_edit).
 - A task note's properties (done, due, repeat, priority, tags, parent, collection) and its name are the reminder's:
   change them with task_update, never in the note. Its body is free, like any note's.
 - A deadline (due) isn't time to work on it: that is a work session, task_schedule.

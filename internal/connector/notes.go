@@ -59,7 +59,8 @@ func (c *Connector) noteTools(s *mcp.Server) {
 		c.vaultMove)
 	add(c, s, &mcp.Tool{Name: "vault_delete", Annotations: changes("Delete a note", true),
 		Description: "Deletes a note, a file or a folder: gone from every device, kept in the server's trash (vault_restore " +
-			"brings it back). A task's note goes only once its task is deleted (task_delete). Ask the user first."},
+			"brings it back). A task's note goes with its task (task_delete, deleteNote), or once its task is deleted. Ask the " +
+			"user first."},
 		c.vaultDelete)
 	add(c, s, &mcp.Tool{Name: "vault_restore", Annotations: changes("Restore a note", false),
 		Description: "Without an id: what can be restored, the last first: deleted notes (the trash) and the versions changes " +
@@ -611,12 +612,21 @@ func (c *Connector) vaultDelete(ctx context.Context, in pathIn) (deleteOut, erro
 		return deleteOut{}, err
 	}
 	if len(tasks) > 0 {
+		// A note still linked to a reminder deleted elsewhere (the phone) can go: Obsidian would only unlink it.
+		live, err := c.liveTasks(ctx)
+		if err != nil {
+			return deleteOut{}, err
+		}
 		var names []string
 		for _, t := range tasks {
-			names = append(names, basename(t.Path))
+			if live[t.UID] {
+				names = append(names, basename(t.Path))
+			}
 		}
-		return deleteOut{}, refuse("still a task's note: %s. Delete the task first (task_delete); its note can go once "+
-			"Obsidian has unlinked it (it loses its caldav_uid)", strings.Join(names, ", "))
+		if len(names) > 0 {
+			return deleteOut{}, refuse("still a task's note: %s. Delete the task with its note (task_delete, deleteNote), or "+
+				"tick it (task_update done)", strings.Join(names, ", "))
+		}
 	}
 	b, err := c.Vault.Delete(p, "vault_delete")
 	if err != nil {
@@ -685,6 +695,8 @@ func (c *Connector) vaultRestore(ctx context.Context, in restoreIn) (restoreOut,
 		}
 		return out, nil
 	}
+	var live map[string]bool
+	var unlink []string // notes of tasks deleted since: back as the extension leaves them, done and unlinked
 	for _, p := range b.Paths {
 		if !isNote(p) {
 			continue
@@ -696,7 +708,15 @@ func (c *Connector) vaultRestore(ctx context.Context, in restoreIn) (restoreOut,
 			old = &m
 		}
 		if old == nil && next.Task() && next.UID != "" {
-			return restoreOut{}, refuse("%q was a task's note: its task makes it again, if it still exists", p)
+			if live == nil {
+				if live, err = c.liveTasks(ctx); err != nil {
+					return restoreOut{}, err
+				}
+			}
+			if live[next.UID] {
+				return restoreOut{}, refuse("%q was the note of a task still there: its task makes it again", p)
+			}
+			unlink = append(unlink, p)
 		}
 		if old != nil {
 			if err := guard(old, next); err != nil {
@@ -706,6 +726,20 @@ func (c *Connector) vaultRestore(ctx context.Context, in restoreIn) (restoreOut,
 	}
 	if _, err := c.Vault.Restore(in.ID); err != nil {
 		return restoreOut{}, vaultErr(err)
+	}
+	for _, p := range unlink {
+		data, err := c.Vault.Read(p)
+		if err != nil {
+			return restoreOut{}, vaultErr(err)
+		}
+		text, err := vault.EditProps(string(data), vault.Edit{Key: "done", Value: true},
+			vault.Edit{Key: "caldav_uid", Delete: true}, vault.Edit{Key: "collection", Delete: true})
+		if err != nil {
+			return restoreOut{}, err
+		}
+		if err := c.Vault.Write(p, []byte(text), vault.Version(data), "vault_restore"); err != nil {
+			return restoreOut{}, vaultErr(err)
+		}
 	}
 	return restoreOut{Restored: b.Paths}, nil
 }

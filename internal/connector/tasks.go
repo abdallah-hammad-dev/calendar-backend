@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -11,9 +12,11 @@ import (
 
 	"github.com/emersion/go-ical"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/teambition/rrule-go"
 
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/davis"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/ics"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/vault"
 )
 
 // Tasks are VTODOs, read and written as the extension does (its vtodo.ts): the deadline is DUE (with DTSTART =
@@ -24,7 +27,8 @@ func (c *Connector) taskTools(s *mcp.Server) {
 	add(c, s, &mcp.Tool{Name: "tasks_list", Annotations: readOnly("List tasks"),
 		InputSchema: schema[tasksIn](map[string][]any{"status": {"open", "done", "all"}}),
 		Description: "Tasks (reminders) with their deadline, repetition, priority, tags, parent, collection, and their note " +
-			"in the vault (made by the extension) with its link. Filters are optional."},
+			"in the vault (made by the extension) with its link; a task with no note yet shows its text (notes). Filters are " +
+			"optional."},
 		c.listTasks)
 	add(c, s, &mcp.Tool{Name: "task_create", Annotations: changes("Create a task", false),
 		InputSchema: schema[taskIn](priorities),
@@ -36,12 +40,14 @@ func (c *Connector) taskTools(s *mcp.Server) {
 	add(c, s, &mcp.Tool{Name: "task_update", Annotations: changes("Change a task", false),
 		InputSchema: schema[taskUpdateIn](map[string][]any{"priority": {"high", "medium", "low", ""}}),
 		Description: "Changes a task: tick it (done), rename it (the extension renames its note), its deadline, repetition, " +
-			"priority, tags, parent, collection. An empty string takes a field off. A repeating task ticked comes back at its " +
-			"next date once Obsidian syncs. `task`: its uid, title or note."},
+			"priority, tags, parent, collection, and its text (`notes`) while it has no note yet (tasks_list shows them; once " +
+			"the note is made, change its body with vault_edit). An empty string takes a field off. A repeating task ticked " +
+			"comes back at once at its next date. `task`: its uid, title or note."},
 		c.updateTask)
 	add(c, s, &mcp.Tool{Name: "task_delete", Annotations: changes("Delete a task", true),
-		Description: "Deletes a task's reminder. Its note stays, marked done and unlinked (vault_delete can then remove it). " +
-			"To close a task, tick it instead (task_update done). Ask the user first."},
+		Description: "Deletes a task's reminder, and its note with deleteNote (to the server's trash: vault_restore brings it " +
+			"back). Without it the note stays, marked done and unlinked. To close a task, tick it instead (task_update done). " +
+			"Ask the user first."},
 		c.deleteTask)
 	add(c, s, &mcp.Tool{Name: "task_schedule", Annotations: changes("Block time for a task", false),
 		Description: "Makes a work session for a task: an event linked to it (in the calendar, a click opens the task). Use " +
@@ -64,8 +70,30 @@ type task struct {
 	Completed  string   `json:"completed,omitempty"`
 	Note       string   `json:"note,omitempty" jsonschema:"its note in the vault"`
 	Link       string   `json:"link,omitempty" jsonschema:"how a note links to it"`
+	Notes      string   `json:"notes,omitempty" jsonschema:"while it has no note yet: the reminder's notes, which become the note's body"`
 
 	item item
+}
+
+// linkPrefix starts the extension's link back to a task's note (its taskLink: the reminder's URL, and the last line
+// of its notes).
+const linkPrefix = "obsidian://calendar-tasks?"
+
+// notesOf are a reminder's notes without the extension's link line (its vtodo.ts readTask).
+func notesOf(td *ical.Component) string {
+	var kept []string
+	for _, l := range strings.Split(text(td, ical.PropDescription), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(l), linkPrefix) {
+			kept = append(kept, l)
+		}
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+// madeInObsidian: an Obsidian has made the task's note, and gave the reminder its link (ensureLink), even if the
+// note hasn't reached this server yet.
+func madeInObsidian(td *ical.Component) bool {
+	return strings.HasPrefix(ics.Value(td, ical.PropURL), linkPrefix) || strings.Contains(text(td, ical.PropDescription), linkPrefix)
 }
 
 var priorityOf = map[int]string{1: "high", 2: "high", 3: "high", 4: "high", 5: "medium", 6: "low", 7: "low", 8: "low", 9: "low"}
@@ -242,6 +270,9 @@ func (c *Connector) listTasks(ctx context.Context, in tasksIn) (tasksOut, error)
 		}
 		t.Parent = titles[t.ParentUID]
 		t.withNote(notes, c.TasksFolder)
+		if t.Note == "" {
+			t.Notes = notesOf(master(t.item.cal, ical.CompToDo))
+		}
 		out.Tasks = append(out.Tasks, t)
 	}
 	sort.SliceStable(out.Tasks, func(i, j int) bool {
@@ -492,11 +523,13 @@ type taskUpdateIn struct {
 	Tags       *[]string `json:"tags,omitempty" jsonschema:"its tags, the whole list (an empty list takes them off)"`
 	Parent     *string   `json:"parent,omitempty" jsonschema:"the parent task (uid, title or note); \"\" makes it a task of its own"`
 	Collection string    `json:"collection,omitempty" jsonschema:"move it to this collection"`
+	Notes      *string   `json:"notes,omitempty" jsonschema:"markdown: the reminder's notes, which become its note's body, while it has no note yet (then vault_edit); \"\" takes them off"`
 }
 
 type taskChangedOut struct {
 	UID   string `json:"uid"`
 	Done  string `json:"done"`
+	Due   string `json:"due,omitempty" jsonschema:"a repeating task ticked: its next deadline"`
 	Note  string `json:"note,omitempty"`
 	Link  string `json:"link,omitempty"`
 	Later string `json:"later,omitempty" jsonschema:"what the extension does at its next sync"`
@@ -510,7 +543,24 @@ func (c *Connector) updateTask(ctx context.Context, in taskUpdateIn) (taskChange
 	it := t.item
 	td := master(it.cal, ical.CompToDo)
 	out := taskChangedOut{UID: t.UID, Done: "changed"}
+	notes := c.index()
 	var later []string
+	if in.Notes != nil {
+		// The reminder's notes are the task's text only until its note is made (TaskSync.applyItem); the body is
+		// the vault's afterwards, and the extension reads the notes no more.
+		if p := notes.tasks[t.UID]; p != "" {
+			return out, refuse("its note %q exists: change its body there (vault_read, vault_edit)", p)
+		}
+		if madeInObsidian(td) {
+			return out, refuse("Obsidian has just made its note, which is on its way to this server: try again in a minute " +
+				"(tasks_list then shows it), and change its body with vault_edit")
+		}
+		if n := strings.TrimSpace(*in.Notes); n != "" {
+			td.Props.SetText(ical.PropDescription, n)
+		} else {
+			td.Props.Del(ical.PropDescription)
+		}
+	}
 	if in.Title != nil {
 		title := strings.TrimSpace(*in.Title)
 		if title == "" {
@@ -585,20 +635,41 @@ func (c *Connector) updateTask(ctx context.Context, in taskUpdateIn) (taskChange
 			setParent(td, p.UID)
 		}
 	}
+	// A repeating task ticked comes back at its next date at once, as the extension moves it on (TaskSync.moveOn),
+	// instead of staying done on the phone until an Obsidian syncs. Its note keeps the time it was done.
+	var next *when
+	completion := ""
 	if in.Done != nil {
-		setDone(td, *in.Done)
-		if *in.Done && td.Props.Get(ical.PropRecurrenceRule) != nil {
-			later = append(later, "it repeats: it comes back at its next date")
-		}
-		if *in.Done {
+		due, hasDue := c.localOf(td.Props.Get(ical.PropDue))
+		rule := c.ruleOf(td)
+		switch {
+		case *in.Done && rule != "" && hasDue:
+			completion = time.Now().In(c.Loc).Format(timeLayout)
+			if t.Done && t.Completed != "" {
+				completion = t.Completed // ticked on the phone, not moved on yet
+			}
+			if n, ok := c.nextOccurrence(due, rule, time.Now()); ok {
+				c.setDue(it.cal, td, &n)
+				setDone(td, false)
+				next = &n
+				out.Done, out.Due = "ticked: it repeats, back for "+n.String(), n.String()
+			} else {
+				setDone(td, true)
+				completion = ""
+				out.Done = "ticked"
+				later = append(later, "that was its last time (its repetition has ended): it stays done")
+			}
+		case *in.Done:
+			setDone(td, true)
 			out.Done = "ticked"
-		} else {
+		default:
+			setDone(td, false)
 			out.Done = "unticked"
 		}
 	}
 	touch(td)
-	out.Later = strings.Join(later, "; ")
-	out.Note = c.index().tasks[t.UID]
+	out.Note = notes.tasks[t.UID]
+	moved := ""
 	if in.Collection != "" {
 		to, err := c.collection(ctx, in.Collection, ical.CompToDo)
 		if err != nil {
@@ -608,32 +679,156 @@ func (c *Connector) updateTask(ctx context.Context, in taskUpdateIn) (taskChange
 			if err := c.moveTo(ctx, it, to); err != nil {
 				return out, err
 			}
-			c.Log.Info("connector: task moved", "uid", t.UID)
-			out.Done += ", moved to " + name(to)
-			return out, nil
+			moved = name(to)
 		}
 	}
-	if err := c.save(ctx, it); err != nil {
-		return out, err
+	if moved == "" {
+		if err := c.save(ctx, it); err != nil {
+			return out, err
+		}
+		c.Log.Info("connector: task changed", "uid", t.UID)
+	} else {
+		c.Log.Info("connector: task moved", "uid", t.UID)
+		out.Done += ", moved to " + moved
 	}
-	c.Log.Info("connector: task changed", "uid", t.UID)
+	if next != nil && out.Note != "" {
+		if err := c.movedOn(out.Note, *next, completion); err != nil {
+			later = append(later, fmt.Sprintf("its note's list of times done (completions) misses %s: %v", completion, plain(err)))
+		}
+	}
+	out.Later = strings.Join(later, "; ")
 	return out, nil
+}
+
+// movedOn writes into a repeating task's note what the extension writes when it moves the task on
+// (TaskSync.moveOn): not done, its next deadline, the time it was done added to completions. The extension then
+// finds the note already in step with the reminder.
+func (c *Connector) movedOn(p string, next when, at string) error {
+	for try := 0; ; try++ {
+		data, err := c.Vault.Read(p)
+		if err != nil {
+			return vaultErr(err)
+		}
+		if !vault.ReadMeta(data).Task() {
+			return nil
+		}
+		text, err := vault.EditProps(string(data),
+			vault.Edit{Key: "done", Value: false},
+			vault.Edit{Key: "due", Value: next.String()},
+			vault.Edit{Key: "completed", Delete: true},
+			vault.Edit{Key: "completions", Value: at, Append: true})
+		if err != nil {
+			return err
+		}
+		err = c.Vault.Write(p, []byte(text), vault.Version(data), "task_update")
+		if !errors.Is(err, vault.ErrChanged) || try == 2 {
+			return vaultErr(err)
+		}
+	}
+}
+
+// nextOccurrence is when a repeating task ticked comes back, as the extension finds it (when.ts nextOccurrence):
+// the rule's first date after its deadline and after today (a whole-day task) or now, on the wall clock. ok false:
+// the rule has ended, and the task stays done. rule is ours (UNTIL its last day, ruleOut).
+func (c *Connector) nextOccurrence(due when, rule string, now time.Time) (when, bool) {
+	wall := func(t time.Time) time.Time {
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, time.UTC)
+	}
+	start := wall(due.t)
+	if m := untilPart.FindStringSubmatch(rule); m != nil && len(m[2]) == 8 && !due.day {
+		rule = untilPart.ReplaceAllString(rule, "${1}UNTIL="+m[2]+"T235959") // that last day included
+	}
+	opt, err := rrule.StrToROptionInLocation(rule, time.UTC)
+	if err != nil {
+		return when{}, false
+	}
+	opt.Dtstart = start
+	r, err := rrule.NewRRule(*opt)
+	if err != nil {
+		return when{}, false
+	}
+	floor := wall(now.In(c.Loc))
+	if due.day {
+		floor = time.Date(floor.Year(), floor.Month(), floor.Day(), 0, 0, 0, 0, time.UTC)
+	}
+	it := r.Iterator()
+	for k := 0; k < 5000; k++ {
+		t, ok := it()
+		if !ok {
+			return when{}, false
+		}
+		if t.After(start) && t.After(floor) {
+			return when{t: time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), 0, 0, c.Loc), day: due.day}, true
+		}
+	}
+	return when{}, false
 }
 
 type taskRef struct {
 	Task string `json:"task" jsonschema:"its uid, title or note"`
 }
 
-func (c *Connector) deleteTask(ctx context.Context, in taskRef) (doneOut, error) {
+type taskDeleteIn struct {
+	Task       string `json:"task" jsonschema:"its uid, title or note"`
+	DeleteNote bool   `json:"deleteNote,omitempty" jsonschema:"delete its note too (to the server's trash: vault_restore brings it back, unlinked)"`
+}
+
+type taskDeletedOut struct {
+	Done      string `json:"done"`
+	UID       string `json:"uid"`
+	Note      string `json:"note,omitempty" jsonschema:"its note, deleted with it"`
+	RestoreID string `json:"restoreId,omitempty" jsonschema:"vault_restore brings the note back"`
+}
+
+// deleteTask deletes the reminder, and its note if asked. The note goes first: a device then sees it deleted, and
+// its extension's own delete of the reminder, 10 seconds later, finds it gone (spec §10.2). The other way round, a
+// device reading the calendar first unlinks the note while it's being deleted, and LiveSync may bring it back.
+func (c *Connector) deleteTask(ctx context.Context, in taskDeleteIn) (taskDeletedOut, error) {
 	t, err := c.findTask(ctx, in.Task)
 	if err != nil {
-		return doneOut{}, err
+		return taskDeletedOut{}, err
+	}
+	out := taskDeletedOut{UID: t.UID}
+	note := c.index().tasks[t.UID]
+	if in.DeleteNote && note != "" {
+		b, err := c.Vault.Delete(note, "task_delete")
+		if err != nil {
+			return out, vaultErr(err)
+		}
+		out.Note, out.RestoreID = note, b.ID
 	}
 	if err := c.Davis.Delete(ctx, t.item.Href, t.item.ETag); err != nil {
-		return doneOut{}, dav(err)
+		if out.RestoreID != "" {
+			c.Vault.Restore(out.RestoreID)
+		}
+		return taskDeletedOut{}, dav(err)
 	}
 	c.Log.Info("connector: task deleted", "uid", t.UID)
-	return doneOut{Done: "deleted (its note stays, done and unlinked, once Obsidian syncs)", UID: t.UID}, nil
+	seen := madeInObsidian(master(t.item.cal, ical.CompToDo))
+	switch {
+	case out.Note != "":
+		out.Done = "deleted, with its note"
+	case note == "" && !seen:
+		out.Done = "deleted (it had no note yet: none will be made)"
+	case in.DeleteNote:
+		out.Done = "deleted; its note isn't on this server yet: once it is (done and unlinked), vault_delete can remove it"
+	default:
+		out.Done = "deleted (its note stays, done and unlinked once Obsidian syncs; vault_delete can remove it)"
+	}
+	return out, nil
+}
+
+// liveTasks are the UIDs of the tasks on the calendar server.
+func (c *Connector) liveTasks(ctx context.Context) (map[string]bool, error) {
+	all, err := c.allTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	live := map[string]bool{}
+	for _, t := range all {
+		live[t.UID] = true
+	}
+	return live, nil
 }
 
 type scheduleIn struct {

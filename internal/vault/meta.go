@@ -2,6 +2,9 @@ package vault
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"regexp"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -140,6 +143,97 @@ func pathExt(p string) string {
 		return ""
 	}
 	return p[i:]
+}
+
+// Edit is one property change for EditProps: Value set (where the property is, else added last), Delete takes it
+// off, Append adds Value to its list (a single value becomes a list; none, a list of one).
+type Edit struct {
+	Key    string
+	Value  any
+	Delete bool
+	Append bool
+}
+
+// EditProps changes a note's properties as the extension does through Obsidian's processFrontMatter (spec §10.2:
+// a repeating task moved on): only the keys edited change; the others, their order, their spelling and the body
+// stay. A note without properties gets them.
+func EditProps(text string, edits ...Edit) (string, error) {
+	y, body, ok := Split(text)
+	if !ok {
+		body = text
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(y), &doc); err != nil {
+		return "", fmt.Errorf("the note's properties don't read: %w", err)
+	}
+	if doc.Kind == 0 {
+		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, Tag: "!!map"}}}
+	}
+	m := doc.Content[0]
+	if m.Kind != yaml.MappingNode {
+		return "", errors.New("the note's properties aren't names with values")
+	}
+	for _, e := range edits {
+		at := -1
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			if m.Content[i].Value == e.Key {
+				at = i
+				break
+			}
+		}
+		key := &yaml.Node{Kind: yaml.ScalarNode, Value: e.Key}
+		switch {
+		case e.Delete:
+			if at >= 0 {
+				m.Content = append(m.Content[:at], m.Content[at+2:]...)
+			}
+		case e.Append:
+			item := valueNode(e.Value)
+			switch {
+			case at < 0:
+				m.Content = append(m.Content, key, list(item))
+			case m.Content[at+1].Kind == yaml.SequenceNode:
+				m.Content[at+1].Content = append(m.Content[at+1].Content, item)
+			case m.Content[at+1].ShortTag() == "!!null":
+				m.Content[at+1] = list(item)
+			default:
+				m.Content[at+1] = list(m.Content[at+1], item)
+			}
+		case at < 0:
+			m.Content = append(m.Content, key, valueNode(e.Value))
+		default:
+			m.Content[at+1] = valueNode(e.Value)
+		}
+	}
+	if len(m.Content) == 0 {
+		return "---\n---\n" + body, nil
+	}
+	var b bytes.Buffer
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return "", err
+	}
+	enc.Close()
+	return "---\n" + b.String() + "---\n" + body, nil
+}
+
+func list(items ...*yaml.Node) *yaml.Node {
+	return &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: items}
+}
+
+// localTime is a day or a local date-time, as the extension writes them (due, completions).
+var localTime = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$`)
+
+// valueNode is v as a YAML value; a day or a local time is written plain, as Obsidian writes it (yaml.v3 would
+// quote a day, which reads as a timestamp).
+func valueNode(v any) *yaml.Node {
+	if s, ok := v.(string); ok && localTime.MatchString(s) {
+		return &yaml.Node{Kind: yaml.ScalarNode, Value: s}
+	}
+	var n yaml.Node
+	n.Encode(v)
+	return &n
 }
 
 // Frontmatter writes properties as a note's YAML block, in the order given (name, value pairs), the way the

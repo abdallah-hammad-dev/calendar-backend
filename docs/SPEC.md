@@ -436,6 +436,12 @@ body is the vault's (§10.3). Same rules as the mirror (§5.2): times in my zone
     reminder's notes (`DESCRIPTION`) become the note's body** (`TaskSync.applyItem`, only when it makes the note:
     afterwards the body is the vault's). One note whatever the number of devices (extension spec §6.2). It shows on
     the iPhone even with no Obsidian open.
+  - **Its text before the note exists is the reminder's notes** (2026-11-05: Claude couldn't change a task it had
+    just made, said "open Obsidian", and the user: "pk je dois ouvrir obsidian pr la syncro?"): `tasks_list` shows
+    them, `task_update` (`notes`) changes them. Once an Obsidian has made the note they're its no more: the note is
+    here (then `vault_edit`), or on its way, which the reminder says (the extension gave it its link back, `URL` and
+    the notes' last line): refused, try again in a minute. Left: the seconds between the note made on a device and
+    its link reaching Davis.
   - **Never as a note file**, nor as a `- [ ] … @…` line: a note from the bridge and one made by the extension from
     the reminder could reach a device in either order (two notes, or a LiveSync conflict), and a synced line is never
     converted.
@@ -445,9 +451,19 @@ body is the vault's (§10.3). Same rules as the mirror (§5.2): times in my zone
     task link with its checkbox); the link resolves once an Obsidian has made the note. A sub-task's line in its
     parent's note is the extension's (it adds it unless the body already links to it).
   - **Changed** in Davis: title (the extension renames the note through Obsidian, links follow), deadline,
-    repetition, priority, tags, parent, collection, done (a repeating task moves on as when ticked on the phone).
-  - **Deleted** in Davis: the extension leaves the note `done` and unlinked (extension spec §6.4). Its file can then go
-    through `vault_delete`, once it has no `caldav_uid` any more.
+    repetition, priority, tags, parent, collection, done, and its text while it has no note (above).
+  - **A repeating task ticked moves on at once** (2026-11-05, the same day: it stayed done on the phone until an
+    Obsidian synced), as the extension's `TaskSync.moveOn`: its first date after the deadline and after today (a whole
+    day) or now, on the wall clock, its last day (`UNTIL`) included; not done, no `COMPLETED`. Its note, when it is
+    here, gets what `moveOn` writes (`done: false`, the new `due`, `completed` off, the time ticked added to
+    `completions`), so the extension finds it in step. Its last time leaves it done, as there.
+  - **Deleted** in Davis: the extension leaves the note `done` and unlinked (extension spec §6.4). **With
+    `deleteNote` the connector deletes the note too** (2026-11-05), first, into its trash, then the reminder: a device
+    sees the note go, and its extension's own delete of the reminder 10 seconds later finds it gone (a `404` is done
+    there, no notice). A device that reads the calendar before LiveSync brings the deletion unlinks the note meanwhile,
+    and LiveSync may keep that version: the note comes back done and unlinked, as without `deleteNote`. A note still
+    linked to a reminder deleted elsewhere (the phone) goes through `vault_delete`; one restored from the trash
+    whose task is gone comes back done and unlinked.
 - **An event is a `VEVENT`** of mine (no `X-CALTASKS-SOURCE-ACCOUNT`, so editable everywhere): `SUMMARY`, `DTSTART`
   / `DTEND` (`VALUE=DATE` all day), `LOCATION`, `DESCRIPTION`, `RRULE`; changed and deleted in Davis, one occurrence of
   a series as an exception or an `EXDATE`. A **work session** on a task is a `VEVENT` with `RELATED-TO:<task UID>`
