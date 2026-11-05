@@ -356,6 +356,31 @@ func TestEventsAgainstDavis(t *testing.T) {
 		t.Fatalf("the note in the list: %v", got)
 	}
 
+	// A video meeting: its link as the extension writes it, kept by a new place, changed, taken off.
+	h.refused("event_create", map[string]any{"title": "x", "start": "2026-11-12T10:00", "collection": g, "meeting": "salle 3"}, "isn't a link")
+	visio := h.ok("event_create", map[string]any{"title": "Point visio", "start": "2026-11-12T10:00", "collection": g,
+		"meeting": "meet.google.com/abc-defg-hij"})["uid"].(string)
+	shown := items(h.ok("calendar_list", map[string]any{"from": "2026-11-12", "to": "2026-11-13", "collection": g}), "items")
+	if len(shown) != 1 || shown[0]["meeting"] != "https://meet.google.com/abc-defg-hij" || shown[0]["location"] != "https://meet.google.com/abc-defg-hij" {
+		t.Fatalf("a meeting: %v", shown)
+	}
+	h.ok("event_update", map[string]any{"uid": visio, "location": "Salle 3"})
+	ev1 := master(h.raw(visio, ical.CompEvent).cal, ical.CompEvent)
+	if text(ev1, ical.PropDescription) != "Meet: https://meet.google.com/abc-defg-hij" || len(ev1.Props[ical.PropConference]) != 1 {
+		t.Fatalf("a new place should keep the meeting: %s", ics.Encode(h.raw(visio, ical.CompEvent).cal))
+	}
+	h.ok("event_update", map[string]any{"uid": visio, "meeting": "https://us02web.zoom.us/j/1"})
+	ev1 = master(h.raw(visio, ical.CompEvent).cal, ical.CompEvent)
+	if currentMeeting(ev1) != "https://us02web.zoom.us/j/1" || text(ev1, ical.PropDescription) != "Zoom: https://us02web.zoom.us/j/1" {
+		t.Fatalf("another link: %s", ics.Encode(h.raw(visio, ical.CompEvent).cal))
+	}
+	h.ok("event_update", map[string]any{"uid": visio, "meeting": ""})
+	ev1 = master(h.raw(visio, ical.CompEvent).cal, ical.CompEvent)
+	if currentMeeting(ev1) != "" || ev1.Props.Get(ical.PropDescription) != nil || text(ev1, ical.PropLocation) != "Salle 3" {
+		t.Fatalf("taken off: %s", ics.Encode(h.raw(visio, ical.CompEvent).cal))
+	}
+	h.ok("event_delete", map[string]any{"uid": visio})
+
 	// The whole series moved to the other collection, then made a single event.
 	h.ok("event_update", map[string]any{"uid": uid, "collection": h.names["ecole"]})
 	h.ok("event_update", map[string]any{"uid": uid, "repeat": ""})

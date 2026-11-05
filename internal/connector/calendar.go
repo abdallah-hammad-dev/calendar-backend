@@ -62,7 +62,7 @@ func (c *Connector) calendarTools(s *mcp.Server) {
 			"use task_schedule. Returns its uid."},
 		c.createEvent)
 	add(c, s, &mcp.Tool{Name: "event_update", Annotations: changes("Change an event", false),
-		Description: "Changes an event: title, times, place, notes, repetition, collection. For one occurrence of a series pass " +
+		Description: "Changes an event: title, times, place, video meeting link, notes, repetition, collection. For one occurrence of a series pass " +
 			"its recurrenceId (from calendar_list); without it, the whole series changes. An empty string takes a field off. " +
 			"Invitations and events copied from other accounts can't be changed (rsvp answers them)."},
 		c.updateEvent)
@@ -96,6 +96,7 @@ type occurrenceOut struct {
 	UID          string `json:"uid"`
 	RecurrenceID string `json:"recurrenceId,omitempty" jsonschema:"this occurrence of a series"`
 	Location     string `json:"location,omitempty"`
+	Meeting      string `json:"meeting,omitempty" jsonschema:"its video meeting's link"`
 	Notes        string `json:"notes,omitempty"`
 	URL          string `json:"url,omitempty"`
 	Account      string `json:"account,omitempty" jsonschema:"copied from this account of the user's: read-only but for rsvp and event_delete"`
@@ -166,7 +167,8 @@ func (c *Connector) occurrence(ev *ical.Component, coll string) (occurrenceOut, 
 	}
 	o := occurrenceOut{Kind: "event", Title: text(ev, ical.PropSummary), Start: start.String(), AllDay: start.day,
 		Collection: coll, UID: text(ev, ical.PropUID), RecurrenceID: rid(ev.Props.Get(ical.PropRecurrenceID)),
-		Location: text(ev, ical.PropLocation), URL: ics.Value(ev, ical.PropURL), Account: text(ev, sourceProp)}
+		Location: text(ev, ical.PropLocation), Meeting: currentMeeting(ev), URL: ics.Value(ev, ical.PropURL),
+		Account: text(ev, sourceProp)}
 	if end, ok := c.localOf(ev.Props.Get(ical.PropDateTimeEnd)); ok {
 		o.End = end.String()
 	} else if p := ev.Props.Get(ical.PropDuration); p != nil {
@@ -460,6 +462,7 @@ type eventIn struct {
 	End        string `json:"end,omitempty" jsonschema:"exclusive (a whole-day event's is the day after its last day); default: an hour, or one day"`
 	Collection string `json:"collection" jsonschema:"one of collections_list's names"`
 	Location   string `json:"location,omitempty"`
+	Meeting    string `json:"meeting,omitempty" jsonschema:"its video meeting's link (Zoom, Meet, Teams…): Obsidian's Join button; the place keeps a room"`
 	Notes      string `json:"notes,omitempty" jsonschema:"the event's description"`
 	Repeat     string `json:"repeat,omitempty" jsonschema:"an RRULE, as FREQ=WEEKLY;BYDAY=TU or FREQ=DAILY;COUNT=5; UNTIL=YYYYMMDD is the last day"`
 }
@@ -512,7 +515,11 @@ func (c *Connector) createEvent(ctx context.Context, in eventIn) (createdOut, er
 	if err != nil {
 		return createdOut{}, err
 	}
-	uid, err := c.putEvent(ctx, col, newEvent{title: title, start: s, end: e, location: in.Location, notes: in.Notes, rule: in.Repeat})
+	link, err := meetingLink(in.Meeting)
+	if err != nil {
+		return createdOut{}, err
+	}
+	uid, err := c.putEvent(ctx, col, newEvent{title: title, start: s, end: e, location: in.Location, meeting: link, notes: in.Notes, rule: in.Repeat})
 	if err != nil {
 		return createdOut{}, err
 	}
@@ -520,8 +527,8 @@ func (c *Connector) createEvent(ctx context.Context, in eventIn) (createdOut, er
 }
 
 type newEvent struct {
-	title, location, notes, rule, related string
-	start, end                            when
+	title, location, meeting, notes, rule, related string
+	start, end                                     when
 }
 
 func (c *Connector) putEvent(ctx context.Context, col davis.Calendar, e newEvent) (string, error) {
@@ -539,6 +546,9 @@ func (c *Connector) putEvent(ctx context.Context, col davis.Calendar, e newEvent
 	}
 	if n := strings.TrimSpace(e.notes); n != "" {
 		ev.Props.SetText(ical.PropDescription, n)
+	}
+	if e.meeting != "" {
+		setMeeting(ev, e.meeting, "")
 	}
 	if e.related != "" {
 		ev.Props.Set(ics.Prop(ical.PropRelatedTo, e.related))
@@ -565,6 +575,7 @@ type eventUpdateIn struct {
 	Start        *string `json:"start,omitempty" jsonschema:"local time; alone, the event keeps its length"`
 	End          *string `json:"end,omitempty" jsonschema:"local time, exclusive"`
 	Location     *string `json:"location,omitempty" jsonschema:"\"\" takes it off"`
+	Meeting      *string `json:"meeting,omitempty" jsonschema:"the video meeting's link; \"\" takes it off"`
 	Notes        *string `json:"notes,omitempty" jsonschema:"the description; \"\" takes it off"`
 	Repeat       *string `json:"repeat,omitempty" jsonschema:"the series' RRULE (UNTIL=YYYYMMDD: the last day); \"\" makes it a single event. Another pattern drops the series' changed occurrences"`
 	Collection   string  `json:"collection,omitempty" jsonschema:"move it to this collection"`
@@ -617,6 +628,13 @@ func (c *Connector) updateEvent(ctx context.Context, in eventUpdateIn) (doneOut,
 		}
 		ev.Props.SetText(ical.PropSummary, strings.TrimSpace(*in.Title))
 	}
+	link, err := "", error(nil)
+	if in.Meeting != nil {
+		if link, err = meetingLink(*in.Meeting); err != nil {
+			return doneOut{}, err
+		}
+	}
+	had := currentMeeting(ev)
 	for prop, v := range map[string]*string{ical.PropLocation: in.Location, ical.PropDescription: in.Notes} {
 		if v == nil {
 			continue
@@ -626,6 +644,12 @@ func (c *Connector) updateEvent(ctx context.Context, in eventUpdateIn) (doneOut,
 		} else {
 			ev.Props.SetText(prop, strings.TrimSpace(*v))
 		}
+	}
+	// A new place or notes keep the meeting: its copy for the iPhone goes where it still fits.
+	if in.Meeting != nil {
+		setMeeting(ev, link, had)
+	} else if had != "" && (in.Location != nil || in.Notes != nil) {
+		setMeeting(ev, had, had)
 	}
 	if in.Start != nil || in.End != nil {
 		oldS, okS := c.localOf(ev.Props.Get(ical.PropDateTimeStart))

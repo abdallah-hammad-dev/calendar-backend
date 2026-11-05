@@ -563,7 +563,9 @@ body is the vault's (§10.3). Same rules as the mirror (§5.2): times in my zone
   `event_delete`, `rsvp`, `event_note`; `tasks_list`, `task_create` / `task_update` / `task_delete`,
   `task_schedule` (a work session); `vault_list`, `vault_search`, `vault_read`, `vault_write`, `vault_edit`,
   `vault_move`, `vault_delete`, `vault_restore` (21, built 2026-11-04 in `internal/connector`, the files in
-  `internal/vault`). Names and inputs close to the extension's Claude module (extension spec §8) and to Claude
+  `internal/vault`). An event's `meeting` (its video link, 2026-11-05) is written as the extension's event form
+  writes it (extension spec §7.1, `connector/meeting.go`, `adapter.Meeting` for the iPhone's copy) and listed by
+  `calendar_list`. Names and inputs close to the extension's Claude module (extension spec §8) and to Claude
   Code's file tools, so Claude handles them alike. Each tool's description says the rules above that concern it (a
   task's note is made by the extension, links resolve once it exists…), and the server's instructions the rules
   common to all. Without a vault (`VAULT_DIR` empty: the bridge not configured) the note tools say so; the calendar
