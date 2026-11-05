@@ -475,6 +475,11 @@ func (e *Engine) write(ctx context.Context, a store.Account, it *store.Item, cur
 				return err
 			}
 			etag = got.ETag
+			// A client's change between that write and this read would pass for the backend's own, never relayed and
+			// lost at the next write: my answer and the dates deleted there are read now (2026-11-05).
+			it.Partstat = partstat
+			e.observe(a, it, got)
+			e.removedOn(a, it, got)
 		}
 		it.Href, it.ETag, it.BaseHash, it.Partstat = href, etag, hash, partstat
 		e.Log.Info("mirrored", "account", a.ID, "uid", it.UID, "href", href)

@@ -221,7 +221,11 @@ extension says nothing of it (its popup stays generic).
 1. I answer on the iPhone or in Obsidian: my `PARTSTAT` changes in the mirror event on Davis (`PUT` with
    `If-Match`).
 2. The backend watches the collections accounts write into (sync-collection; Davis has no push, so polling),
-   compares my `PARTSTAT` with the last one it knows, and calls the adapter's `RSVP`.
+   compares my `PARTSTAT` with the last one it knows, and calls the adapter's `RSVP`. When Davis doesn't give the
+   new `ETag` of a write and the backend reads the copy again for it, an answer or a deleted date found there is a
+   client's made in between, read then: that `ETag` passes for the backend's own afterwards (2026-11-05).
+   Each write of a copy gives it a new `ETag`, so a client's next change made before it reads the copy again is
+   refused (`412`): the extension makes my answer and deleted dates again on the new version (its spec §6.2).
 3. It writes `X-CALTASKS-RSVP-STATE`: `pending`, then `confirmed`, or `failed:<reason>`. The extension shows it under
    the buttons ("Sent to the organizer.", or why it failed) and removes it when I answer again.
    As built (B3, 2026-10-23, `Engine.Relay`, each Davis pass): `confirmed` as soon as the provider's API takes the
@@ -617,6 +621,9 @@ body is the vault's (§10.3). Same rules as the mirror (§5.2): times in my zone
   "Join".)
 - Deleting an invitation on the iPhone: does iOS send a decline first (which the relay would pass on)? Deleting is
   meant to hide only (§5.4, 2026-11-04). To test on the phone.
+- A second answer on the iPhone to the same invitation a minute after the first (the backend wrote the copy again
+  meanwhile, §6 step 2, so iOS's `PUT` gets a `412`): does iOS read it again and answer again, or drop it? If it
+  drops it, the backend should write a copy again only when the source changed (2026-11-05). To test on the phone.
 - `SCHEDULE-AGENT=CLIENT` on the `ORGANIZER` of mirror events would stop Davis's own scheduling on them (the
   `SCHEDULE-STATUS=3.7` attempts, and a REPLY *delivered* if the organizer happens to be a user of the same Davis).
   Bench test needed: does the iPhone still show Accept / Maybe / Decline then?
