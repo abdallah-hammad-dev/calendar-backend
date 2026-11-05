@@ -185,8 +185,9 @@ Rules the mirror applies on top (B1, `internal/mirror/build.go`):
 
 ### 5.3 Declined
 
-Declined invitations stay in the mirror with `PARTSTAT=DECLINED`; the extension hides them (extension spec §4.6),
-the iPhone follows its own "show declined events" setting.
+Declined invitations stay in the mirror with `PARTSTAT=DECLINED`, not in the trash (§5.4: declining answers, deleting
+hides). The extension shows them greyed and struck through unless its setting hides them (extension spec §4.6,
+2026-11-05), the iPhone follows its own "show declined events" setting.
 
 ### 5.4 Trash
 
@@ -229,9 +230,13 @@ extension says nothing of it (its popup stays generic).
    not tried again until I answer again, or the account is signed in again. Reasons are in French, shown as is.
 4. A small "answers in flight" table keeps a provider sync from putting `NEEDS-ACTION` back before the provider
    confirms. (B1: `items.answer`, set when my `PARTSTAT` on Davis differs from the one the backend wrote, used
-   instead of the source's until the source shows the same answer.) Once the provider took it, a source still
-   showing another answer more than 10 minutes later is a change made there since (in Gmail, Outlook): the source
-   wins (B3).
+   instead of the source's until the source shows the same answer.) Once the provider took it, a source showing
+   another answer **modified after it was taken** (its `LAST-MODIFIED`, the provider's own time: Google's
+   `updated`, Graph's `lastModifiedDateTime`) is a change made there since (in Gmail, Outlook): the source wins at
+   once (2026-11-05, the user: declined on the iPhone, yes in Gmail a minute later, and the iPhone kept "no" for
+   good, since Google gives each change once and the 10 minutes had never passed when it came). One modified
+   before is the provider not caught up yet: my answer stays. A source with no `LAST-MODIFIED` (a feed) still waits
+   10 minutes (B3).
 
 The provider then notifies the organizer from the invited address, and the next sync brings the state back.
 

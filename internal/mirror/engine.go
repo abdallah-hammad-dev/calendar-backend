@@ -50,7 +50,8 @@ const (
 )
 
 // sourceWins: once the provider took my answer, a source still showing another one this long after is a change
-// made there since (in Gmail, in Outlook), and wins.
+// made there since (in Gmail, in Outlook), and wins. Only for a source that doesn't say when it last changed: one
+// that does (LAST-MODIFIED, the Google and Microsoft adapters) wins as soon as it changed after my answer was taken.
 const sourceWins = 10 * time.Minute
 
 func (e *Engine) now() time.Time {
@@ -308,7 +309,10 @@ func (e *Engine) upsert(ctx context.Context, a store.Account, ch adapter.Change)
 		case src == it.Answer:
 			e.Log.Info("answer confirmed by the source", "account", a.ID, "uid", it.UID, "partstat", it.Answer)
 			it.Answer, it.Sent = "", ""
-		case it.RSVPState == StateConfirmed && e.now().Sub(it.SentAt) > sourceWins:
+		// Changed there after the provider took mine (2026-11-05, the user: declined on the iPhone, yes in Gmail a
+		// minute later, and the iPhone kept "no"; Google gives each change once, so waiting for sourceWins kept it
+		// for good). A listing older than my answer (the provider not caught up yet) still loses.
+		case it.RSVPState == StateConfirmed && (ics.LastModified(ch.Calendar).After(it.SentAt) || e.now().Sub(it.SentAt) > sourceWins):
 			e.Log.Info("answer changed on the source since it was sent", "account", a.ID, "uid", it.UID, "partstat", src)
 			it.Answer, it.Sent = "", ""
 		}

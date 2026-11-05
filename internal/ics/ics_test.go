@@ -302,3 +302,38 @@ func TestInstant(t *testing.T) {
 		t.Fatalf("values %q", v)
 	}
 }
+
+func TestLastModified(t *testing.T) {
+	cal, err := Parse(crlf(`
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//t//t//EN
+BEGIN:VEVENT
+UID:s
+DTSTAMP:20261105T090000Z
+LAST-MODIFIED:20261105T090000Z
+DTSTART:20261110T090000Z
+RRULE:FREQ=WEEKLY
+END:VEVENT
+BEGIN:VEVENT
+UID:s
+DTSTAMP:20261105T091500Z
+LAST-MODIFIED:20261105T091500Z
+RECURRENCE-ID:20261117T090000Z
+DTSTART:20261117T100000Z
+END:VEVENT
+END:VCALENDAR
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := LastModified(cal), time.Date(2026, 11, 5, 9, 15, 0, 0, time.UTC); !got.Equal(want) {
+		t.Fatalf("got %v, want %v (the latest of the series)", got, want)
+	}
+	for _, ev := range Events(cal) {
+		ev.Props.Del(ical.PropLastModified)
+	}
+	if got := LastModified(cal); !got.IsZero() {
+		t.Fatalf("got %v without LAST-MODIFIED", got)
+	}
+}

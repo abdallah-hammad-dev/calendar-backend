@@ -107,3 +107,16 @@ func Instant(p *ical.Prop, v string) string {
 	}
 	return tzid + ":" + v
 }
+
+// LastModified is the latest LAST-MODIFIED of cal's events (in UTC, as the adapters write the provider's own
+// modification time), or the zero time when none has one.
+func LastModified(cal *ical.Calendar) time.Time {
+	var latest time.Time
+	for _, ev := range Events(cal) {
+		t, err := time.ParseInLocation(utcFormat, Value(ev, ical.PropLastModified), time.UTC)
+		if err == nil && t.After(latest) {
+			latest = t
+		}
+	}
+	return latest
+}

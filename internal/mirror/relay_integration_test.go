@@ -213,6 +213,42 @@ func TestRelayAgainstDavis(t *testing.T) {
 	if len(calls) != 4 {
 		t.Fatalf("the source's answer was sent back: %v", calls)
 	}
+
+	// 6. A source that says when it changed (Google, Microsoft): declined here, yes on the provider a minute later
+	// (2026-11-05, the user's case). Older than my answer, it's the provider not caught up yet: mine stays. Newer,
+	// it's a change made there: it wins at once, and isn't sent back.
+	writeFeedAt := func(partstat string, at time.Time) {
+		t.Helper()
+		ev := strings.Replace(invitationEvent("Soutenance", partstat), "SEQUENCE:0\n",
+			"SEQUENCE:0\nLAST-MODIFIED:"+at.UTC().Format("20060102T150405Z")+"\n", 1)
+		if err := os.WriteFile(feed, []byte(strings.ReplaceAll(feedHead+ev+"END:VCALENDAR\n", "\n", "\r\n")), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFeedAt("ACCEPTED", clock.Add(-2*time.Hour)) // nothing in flight: the source's answer, as is
+	pass()
+	if _, ev := copyOnDavis(); ics.Partstat(ics.Attendee(ev, e.Me)) != "ACCEPTED" {
+		t.Fatal("the source's answer not written")
+	}
+	answer("DECLINED")
+	pass()
+	if len(calls) != 5 || calls[4] != uid+" DECLINED" || state() != StateConfirmed {
+		t.Fatalf("calls %v, state %q", calls, state())
+	}
+	writeFeedAt("ACCEPTED", clock.Add(-time.Hour))
+	pass()
+	if _, ev := copyOnDavis(); ics.Partstat(ics.Attendee(ev, e.Me)) != "DECLINED" {
+		t.Fatal("a listing older than my answer won")
+	}
+	clock = clock.Add(time.Minute)
+	writeFeedAt("ACCEPTED", clock)
+	pass()
+	if _, ev := copyOnDavis(); ics.Partstat(ics.Attendee(ev, e.Me)) != "ACCEPTED" {
+		t.Fatal("a change made on the provider after my answer didn't win")
+	}
+	if it, _ := st.Item(ctx, a.ID, uid); it.Answer != "" || len(calls) != 5 {
+		t.Fatalf("still in flight or sent back: %+v, calls %v", it, calls)
+	}
 }
 
 func mustRead(t *testing.T, path string) []byte {
