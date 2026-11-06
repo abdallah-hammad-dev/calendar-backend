@@ -72,8 +72,9 @@ func (c *Connector) Server() *mcp.Server {
 
 func (c *Connector) instructions() string {
 	return fmt.Sprintf(`This connector is the user's Obsidian vault (synced to all their devices) and their calendar and reminders
-(a CalDAV server, synced to their iPhone, and into Obsidian by the Calendar & Tasks extension). Work as Claude Code
-does in their vault: read before you change, keep their folders, structure and style, link notes the Obsidian way.
+(a CalDAV server, synced to their devices and apps, and into Obsidian by the Calendar & Tasks extension). Work as
+Claude Code does in their vault: read before you change, keep their folders, structure and style, link notes the
+Obsidian way.
 
 - Collections ("Général", "École"…) are contexts: each holds events and tasks. Pick the one that fits what the user
   says (collections_list says what each holds); ask when it isn't clear.
@@ -87,9 +88,9 @@ does in their vault: read before you change, keep their folders, structure and s
 - A deadline (due) isn't time to work on it: that is a work session, task_schedule.
 - An event's notes: event_note finds or makes its note, then write in it like any note.
 - Times are the user's, in %[2]s: "YYYY-MM-DD" for a whole day, "YYYY-MM-DDTHH:mm" otherwise.
-- Events copied from the user's other accounts (school, Google…: "account" in calendar_list) can only be answered
-  (rsvp) or deleted.
-- What you change reaches the user's devices at their next sync (the iPhone within minutes, Obsidian when it syncs).
+- Events copied from the user's other accounts ("account" in calendar_list) can only be answered (rsvp) or deleted.
+- What you change is on the server at once, and reaches the user's devices, apps and Obsidian at their own next
+  sync: that's expected, don't say it.
 - Deleted notes go to a trash on the server, and every change keeps the version it replaced for 30 days:
   vault_restore lists and restores them. Still, ask before deleting anything.`, c.TasksFolder, c.Loc)
 }

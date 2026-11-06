@@ -58,7 +58,7 @@ func (c *Connector) calendarTools(s *mcp.Server) {
 			"events (declined invitations and unanswered ones don't count)."},
 		c.freeSlots)
 	add(c, s, &mcp.Tool{Name: "event_create", Annotations: changes("Create an event", false),
-		Description: "Creates an event in a collection (synced to the user's phone and Obsidian). For time spent on a task, " +
+		Description: "Creates an event in a collection. For time spent on a task, " +
 			"use task_schedule. Returns its uid."},
 		c.createEvent)
 	add(c, s, &mcp.Tool{Name: "event_update", Annotations: changes("Change an event", false),

@@ -32,7 +32,7 @@ func (c *Connector) taskTools(s *mcp.Server) {
 		c.listTasks)
 	add(c, s, &mcp.Tool{Name: "task_create", Annotations: changes("Create a task", false),
 		InputSchema: schema[taskIn](priorities),
-		Description: "Creates a task: a reminder on the user's phone, and a note the extension makes in Obsidian at its next " +
+		Description: "Creates a task: a reminder on the server, and a note the extension makes in Obsidian at its next " +
 			"sync (named after the title; `notes` become its body). Returns the note's link: write it where the task belongs " +
 			"(a line \"- [[Title]]\" shows its checkbox). `due` is the deadline; to block time for it, task_schedule. A step " +
 			"inside a task is a \"- [ ]\" line in its note; a step with its own deadline is a sub-task (`parent`)."},

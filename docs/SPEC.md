@@ -577,7 +577,9 @@ body is the vault's (§10.3). Same rules as the mirror (§5.2): times in my zone
   `calendar_list`. Names and inputs close to the extension's Claude module (extension spec §8) and to Claude
   Code's file tools, so Claude handles them alike. Each tool's description says the rules above that concern it (a
   task's note is made by the extension, links resolve once it exists…), and the server's instructions the rules
-  common to all. Without a vault (`VAULT_DIR` empty: the bridge not configured) the note tools say so; the calendar
+  common to all. No device is named there (2026-11-06: Claude told the user "it will reach your iPhone" after each
+  change, and each friend runs their own backend): a change reaching the devices at their next sync is expected,
+  not said. Without a vault (`VAULT_DIR` empty: the bridge not configured) the note tools say so; the calendar
   and task tools work.
 - **It is the strongest access on the server**: it reads and rewrites the whole vault and the calendar. Logs keep the
   tool's name and UIDs only: no contents, no inputs or outputs, no note paths (they are note titles).
