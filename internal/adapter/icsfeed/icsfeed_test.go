@@ -2,6 +2,9 @@ package icsfeed
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,7 +59,7 @@ END:VCALENDAR
 func TestList(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "feed.ics")
 	os.WriteFile(path, []byte(strings.ReplaceAll(feed, "\n", "\r\n")), 0o600)
-	f := &Feed{URL: "file://" + path}
+	f := &Feed{URL: "file://" + path, Files: true}
 	page, err := f.List(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -94,5 +97,53 @@ func TestErrorsKeepTheSecret(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), "SECRET") {
 			t.Fatalf("%s: %v", u, err)
 		}
+	}
+}
+
+// A feed's link is typed on the accounts page and fetched from inside the VPS (security review, 2026-11-05).
+func TestOnlyPublicHTTPS(t *testing.T) {
+	for _, link := range []string{"https://outlook.office365.com/a.ics", "webcal://p01-calendars.icloud.com/x"} {
+		if err := CheckURL(link); err != nil {
+			t.Errorf("%s: %v", link, err)
+		}
+	}
+	for _, link := range []string{"http://example.com/a.ics", "file:///etc/passwd", "gopher://x", "https:///a.ics", "davis:80"} {
+		if CheckURL(link) == nil {
+			t.Errorf("%s accepted", link)
+		}
+	}
+
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "feed.ics")
+	os.WriteFile(path, []byte(feed), 0o600)
+	for _, link := range []string{"file://" + path, "http://example.com/a.ics"} {
+		if _, err := (&Feed{URL: link}).List(ctx, ""); err == nil || !strings.Contains(err.Error(), "unsupported") {
+			t.Errorf("%s: %v", link, err)
+		}
+	}
+	for _, link := range []string{"https://127.0.0.1:1/a.ics", "https://localhost:1/a.ics", "webcal://[::1]:1/a.ics",
+		"https://169.254.169.254/latest/meta-data", "https://10.0.0.1:1/a.ics"} {
+		if _, err := (&Feed{URL: link}).List(ctx, ""); !errors.Is(err, errNotPublic) {
+			t.Errorf("%s: %v", link, err)
+		}
+	}
+
+	for addr, public := range map[string]bool{
+		"8.8.8.8": true, "2a00:1450:4007:80e::200e": true, "52.97.1.1": true,
+		"127.0.0.1": false, "10.1.2.3": false, "172.18.0.4": false, "192.168.1.1": false, "169.254.169.254": false,
+		"100.101.102.103": false, "0.0.0.0": false, "::1": false, "fd7a:115c:a1e0::1": false, "fe80::1": false,
+		"::ffff:127.0.0.1": false, "64:ff9b::a00:1": false, "2002:a00:1::": false, "224.0.0.1": false, "255.255.255.255": false,
+	} {
+		if got := isPublic(netip.MustParseAddr(addr)); got != public {
+			t.Errorf("%s public = %v", addr, got)
+		}
+	}
+
+	to := func(link string) error {
+		req, _ := http.NewRequest(http.MethodGet, link, nil)
+		return httpsOnly(req, []*http.Request{req})
+	}
+	if to("https://other.example/a.ics") != nil || to("http://other.example/a.ics") == nil {
+		t.Fatal("redirects: https only")
 	}
 }

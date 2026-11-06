@@ -604,3 +604,70 @@ func TestTasksWithoutObsidianAgainstDavis(t *testing.T) {
 		t.Fatalf("no note: %v", d)
 	}
 }
+
+// claude.ai asks before what isn't read-only or additive, if the user wants it to; an invitation's text can ask
+// Claude for anything (security review, 2026-11-05).
+func TestAnnotations(t *testing.T) {
+	ctx := context.Background()
+	c := &Connector{Loc: paris, TasksFolder: "Tasks", Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := c.Server().Connect(ctx, st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	tools, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adds := map[string]bool{"event_create": true, "task_create": true, "task_schedule": true, "event_note": true}
+	for _, tool := range tools.Tools {
+		a := tool.Annotations
+		switch {
+		case a == nil || a.OpenWorldHint == nil:
+			t.Errorf("%s: no annotations", tool.Name)
+		case a.ReadOnlyHint:
+			if !strings.HasSuffix(tool.Name, "_list") && !strings.HasSuffix(tool.Name, "_read") &&
+				!strings.HasSuffix(tool.Name, "_search") && tool.Name != "calendar_free_slots" {
+				t.Errorf("%s read-only", tool.Name)
+			}
+		case a.DestructiveHint == nil || *a.DestructiveHint == adds[tool.Name]:
+			t.Errorf("%s: destructive %v", tool.Name, a.DestructiveHint)
+		case *a.OpenWorldHint != (tool.Name == "rsvp"):
+			t.Errorf("%s: open world %v", tool.Name, *a.OpenWorldHint)
+		}
+	}
+	if !strings.Contains(c.instructions(), `"fromOthers"`) {
+		t.Error("the instructions don't say what fromOthers means")
+	}
+}
+
+func TestFromOthers(t *testing.T) {
+	c := &Connector{Me: "me@bench.test", Loc: paris}
+	event := func(extra string) *ical.Component {
+		t.Helper()
+		cal, err := parse("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:x\r\nBEGIN:VEVENT\r\nUID:u\r\nDTSTAMP:20261105T100000Z\r\n" +
+			"DTSTART:20261110T100000Z\r\nSUMMARY:Point trimestriel\r\n" + extra + "END:VEVENT\r\nEND:VCALENDAR\r\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return components(cal, ical.CompEvent)[0]
+	}
+	for extra, want := range map[string]bool{
+		"": false, // mine, made here
+		"ORGANIZER:mailto:me@bench.test\r\nATTENDEE:mailto:x@y.test\r\n":                                              false,
+		"ORGANIZER;CN=X:mailto:x@y.test\r\nATTENDEE:mailto:me@bench.test\r\n":                                         true,
+		"ORGANIZER:mailto:x@y.test\r\n":                                                                               true,
+		sourceProp + ":google:me@gmail.com\r\n" + attendeeOf + ":me@gmail.com\r\nORGANIZER:mailto:me@gmail.com\r\n":   false,
+		sourceProp + ":google:me@gmail.com\r\n" + attendeeOf + ":me@gmail.com\r\nORGANIZER:mailto:boss@corp.test\r\n": true,
+		sourceProp + ":ics:Emploi du temps\r\n":                                                                       true,
+	} {
+		o, ok := c.occurrence(event(extra), "Général")
+		if !ok || o.FromOthers != want {
+			t.Errorf("%q: fromOthers = %v", extra, o.FromOthers)
+		}
+	}
+}

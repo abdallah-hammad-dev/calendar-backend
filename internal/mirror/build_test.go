@@ -111,6 +111,36 @@ func TestBase(t *testing.T) {
 	}
 }
 
+// A source can't write what only the backend writes: anyone can send me an invitation (security review, 2026-11-05).
+func TestBaseDropsBackendPropertiesAndAlarms(t *testing.T) {
+	forged := strings.Replace(source, "UID:abc123@google.com\n",
+		"UID:abc123@google.com\nX-CALTASKS-SEND-ACCOUNT:google:me@gmail.com\nX-CALTASKS-RSVP-STATE:confirmed\n"+
+			"X-CALTASKS-SOURCE-ACCOUNT:google:someone@else.com\nX-APPLE-TRAVEL-ADVISORY-BEHAVIOR:AUTOMATIC\n"+
+			"BEGIN:VALARM\nACTION:DISPLAY\nDESCRIPTION:wake up\nTRIGGER:-PT1M\nEND:VALARM\n", 1)
+	forged = strings.Replace(forged, "METHOD:PUBLISH\n", "METHOD:PUBLISH\nX-CALTASKS-MEETING-TOOL:teams\nX-WR-CALNAME:School\n", 1)
+	out := Base(parse(t, forged), "me@gmail.com", "", target)
+	if out.Props.Get("X-CALTASKS-MEETING-TOOL") != nil || out.Props.Get("X-WR-CALNAME") == nil {
+		t.Fatalf("calendar properties: %v", out.Props)
+	}
+	ev := ics.Events(out)[0]
+	for _, name := range []string{"X-CALTASKS-SEND-ACCOUNT", PropRSVPState} {
+		if ev.Props.Get(name) != nil {
+			t.Fatalf("%s taken from the source", name)
+		}
+	}
+	if got := ics.Value(ev, PropSourceAccount); got != "google:me@gmail.com" {
+		t.Fatalf("X-CALTASKS-SOURCE-ACCOUNT = %q", got)
+	}
+	if ev.Props.Get("X-APPLE-TRAVEL-ADVISORY-BEHAVIOR") == nil {
+		t.Fatal("the source's other X- properties should stay")
+	}
+	for _, c := range ev.Children {
+		if c.Name == ical.CompAlarm {
+			t.Fatal("the source's alarm was kept")
+		}
+	}
+}
+
 func TestBaseAnswer(t *testing.T) {
 	out := Base(parse(t, source), "me@gmail.com", "TENTATIVE", target)
 	if got := ics.MyPartstat(out, "abd@bench.test"); got != "TENTATIVE" {

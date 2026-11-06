@@ -57,7 +57,7 @@ func TestSetup(t *testing.T) {
 }
 
 func TestCheck(t *testing.T) {
-	const appID = "11111111-2222-4333-8444-555555555555"
+	const appID = "0f1e2d3c-4b5a-4697-8a1b-2c3d4e5f6a7b"
 	for _, c := range []struct {
 		kind string
 		p    ProviderSettings
@@ -68,12 +68,12 @@ func TestCheck(t *testing.T) {
 		{"google", ProviderSettings{ClientID: googleID}, "secret"},
 		{"google", ProviderSettings{ClientID: googleID, ClientSecret: "two words"}, "espace"},
 		{"microsoft", ProviderSettings{ClientID: appID, ClientSecret: "abc8Q~xyz.-_", Tenant: "common"}, ""},
-		{"microsoft", ProviderSettings{ClientID: appID, ClientSecret: "abc8Q~xyz", Tenant: "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"}, ""},
+		{"microsoft", ProviderSettings{ClientID: appID, ClientSecret: "abc8Q~xyz", Tenant: "7a8b9c0d-1e2f-4a3b-9c4d-5e6f7a8b9c0d"}, ""},
 		{"microsoft", ProviderSettings{ClientID: appID, ClientSecret: "abc8Q~xyz", Tenant: "school.example"}, ""},
 		{"microsoft", ProviderSettings{ClientID: "calendar-backend", ClientSecret: "s", Tenant: "common"}, "Vue d'ensemble"},
 		{"microsoft", ProviderSettings{ClientID: appID, ClientSecret: "s", Tenant: "my school"}, "Annuaire"},
 		// The secret's ID, copied instead of its value.
-		{"microsoft", ProviderSettings{ClientID: appID, ClientSecret: "66666666-7777-4888-9999-aaaaaaaaaaaa", Tenant: "common"}, "Valeur"},
+		{"microsoft", ProviderSettings{ClientID: appID, ClientSecret: "3c2b1a09-8f7e-4d6c-b5a4-938271605f4e", Tenant: "common"}, "Valeur"},
 		{"ics", ProviderSettings{ClientID: "x", ClientSecret: "y"}, "inconnue"},
 	} {
 		err := c.p.Check(c.kind)

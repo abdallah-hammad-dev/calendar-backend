@@ -4,6 +4,7 @@
   <div class="row">
     <form class="inline" method="post" action="/sync"><button type="submit">Synchroniser</button></form>
     <form class="inline" method="post" action="/logout"><button type="submit">Se déconnecter</button></form>
+    <form class="inline" method="post" action="/logout-everywhere"><button type="submit" title="Ferme la session de cette page sur tous les appareils (pas les connexions de Claude, en bas)">Se déconnecter partout</button></form>
   </div>
 </header>
 {{if .Notice}}<div class="notice">{{.Notice}}</div>{{end}}

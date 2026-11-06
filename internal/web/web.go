@@ -30,6 +30,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/accounts"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/adapter/icsfeed"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/davis"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/ics"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/mirror"
@@ -80,8 +81,11 @@ type Server struct {
 	// MCP is the Claude connector's endpoint (spec §10.4), served at MCPPath to the clients signed in here.
 	MCP http.Handler
 
-	key     []byte
-	loginMu sync.Mutex // failed logins wait one at a time
+	base   []byte // the session_key setting
+	logins limiter
+
+	keyMu sync.RWMutex
+	key   []byte // sessions' key: from base, the password and session_gen (sessionKey)
 
 	mu      sync.Mutex
 	signIns map[string]signIn    // by OAuth state
@@ -113,7 +117,12 @@ func (s *Server) Handler(ctx context.Context) (http.Handler, error) {
 			return nil, err
 		}
 	}
-	s.key, _ = hex.DecodeString(key)
+	s.base, _ = hex.DecodeString(key)
+	gen, err := s.Store.Setting(ctx, "session_gen")
+	if err != nil {
+		return nil, err
+	}
+	s.setKey(gen)
 	s.signIns = map[string]signIn{}
 	s.codes = map[string]authCode{}
 	s.touched = map[string]time.Time{}
@@ -123,6 +132,7 @@ func (s *Server) Handler(ctx context.Context) (http.Handler, error) {
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /logout", s.logout)
+	mux.Handle("POST /logout-everywhere", s.auth(s.logoutEverywhere))
 	// Public: Google wants a privacy policy's address before an app leaves "Testing" (docs/comptes.md).
 	mux.HandleFunc("GET /privacy", func(w http.ResponseWriter, r *http.Request) { s.render(w, http.StatusOK, "privacy", page{}) })
 	mux.Handle("GET /{$}", s.auth(s.home))
@@ -155,8 +165,21 @@ func headers(next http.Handler) http.Handler {
 
 // --- session
 
+// setKey makes the sessions' key: every session ends when the password changes, or when session_gen does ("Se
+// déconnecter partout"). A session was a signed date alone: a cookie taken from a lost device opened the page, and
+// the connector's consent, for 30 days whatever I did (security review, 2026-11-05).
+func (s *Server) setKey(gen string) {
+	m := hmac.New(sha256.New, s.base)
+	fmt.Fprintf(m, "session\n%s\n%s\n%s", gen, s.User, s.Password)
+	s.keyMu.Lock()
+	s.key = m.Sum(nil)
+	s.keyMu.Unlock()
+}
+
 func (s *Server) sign(expires int64) string {
+	s.keyMu.RLock()
 	m := hmac.New(sha256.New, s.key)
+	s.keyMu.RUnlock()
 	fmt.Fprint(m, expires)
 	return strconv.FormatInt(expires, 10) + "." + base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
@@ -209,25 +232,49 @@ func afterLogin(next string) string {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	from := clientAddr(r)
+	next := afterLogin(r.PostFormValue("next"))
+	at, wait, ok, first := s.logins.take(from, time.Now())
+	if !ok {
+		if first {
+			s.Log.Warn("too many logins on the accounts page: refused for now", "from", from, "for", wait.Round(time.Second))
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		s.render(w, http.StatusTooManyRequests, "login", page{Next: next,
+			Error: fmt.Sprintf("Trop d'essais ratés : réessaie dans %d min.", int(wait.Minutes())+1)})
+		return
+	}
 	user, pass := r.PostFormValue("user"), r.PostFormValue("password")
 	okUser := subtle.ConstantTimeCompare([]byte(user), []byte(s.User)) == 1
 	okPass := subtle.ConstantTimeCompare([]byte(pass), []byte(s.Password)) == 1
 	if !okUser || !okPass {
-		// Slow, and one at a time: guessing the password takes a second per try.
-		s.loginMu.Lock()
-		time.Sleep(time.Second)
-		s.loginMu.Unlock()
-		s.Log.Warn("failed login on the accounts page", "from", r.RemoteAddr)
-		s.render(w, http.StatusUnauthorized, "login", page{Error: "Identifiant ou mot de passe incorrect.",
-			Next: afterLogin(r.PostFormValue("next"))})
+		s.Log.Warn("failed login on the accounts page", "from", from)
+		s.render(w, http.StatusUnauthorized, "login", page{Error: "Identifiant ou mot de passe incorrect.", Next: next})
 		return
 	}
+	s.logins.give(from, at)
 	exp := time.Now().Add(sessionLife).Unix()
 	http.SetCookie(w, s.cookie(s.sign(exp), int(sessionLife.Seconds())))
-	http.Redirect(w, r, afterLogin(r.PostFormValue("next")), http.StatusSeeOther)
+	http.Redirect(w, r, next, http.StatusSeeOther)
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, s.cookie("", -1))
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// logoutEverywhere ends every session, on every device (this one too). The connector's clients keep their tokens:
+// the page lists them, each with its own way out.
+func (s *Server) logoutEverywhere(w http.ResponseWriter, r *http.Request) {
+	b := make([]byte, 16)
+	rand.Read(b)
+	gen := hex.EncodeToString(b)
+	if err := s.Store.SetSetting(r.Context(), "session_gen", gen); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.setKey(gen)
+	s.Log.Info("every session of the accounts page ended", "from", clientAddr(r))
 	http.SetCookie(w, s.cookie("", -1))
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
@@ -530,13 +577,12 @@ func (s *Server) addFeed(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.PostFormValue("name"))
 	address := strings.TrimSpace(r.PostFormValue("address"))
 	link := strings.TrimSpace(r.PostFormValue("url"))
-	u, err := url.Parse(link)
 	switch {
 	case name == "" || link == "":
 		s.problem(w, "Donne un nom et le lien du calendrier.")
 		return
-	case err != nil || (u.Scheme != "https" && u.Scheme != "http" && u.Scheme != "webcal") || u.Host == "":
-		s.problem(w, "Le lien doit commencer par https://, http:// ou webcal://.")
+	case icsfeed.CheckURL(link) != nil:
+		s.problem(w, "Le lien doit commencer par https:// ou webcal://.")
 		return
 	case address != "" && !strings.Contains(address, "@"):
 		s.problem(w, "L'adresse doit être une adresse mail.")

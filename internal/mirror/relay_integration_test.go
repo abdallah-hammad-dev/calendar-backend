@@ -73,7 +73,7 @@ func TestRelayAgainstDavis(t *testing.T) {
 	e := &Engine{Store: st, Davis: dc, Me: p.Email(), Home: p.Home, Loc: paris, Now: func() time.Time { return clock },
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Adapter: func(a store.Account) (adapter.Adapter, error) {
-			return answering{Feed: &icsfeed.Feed{URL: "file://" + feed}, calls: &calls, next: &next}, nil
+			return answering{Feed: &icsfeed.Feed{URL: "file://" + feed, Files: true}, calls: &calls, next: &next}, nil
 		}}
 	if testing.Verbose() {
 		e.Log = slog.New(slog.NewTextHandler(os.Stderr, nil))

@@ -47,7 +47,7 @@ func TestFeedsWithoutOrSharingAnAddressAgainstDavis(t *testing.T) {
 		Adapter: func(a store.Account) (adapter.Adapter, error) {
 			var c struct{ URL string }
 			json.Unmarshal([]byte(a.Config), &c)
-			return &icsfeed.Feed{URL: c.URL}, nil
+			return &icsfeed.Feed{URL: c.URL, Files: true}, nil
 		}}
 
 	suffix := fmt.Sprint(time.Now().UnixNano())

@@ -126,12 +126,8 @@ func TestLoginAndSession(t *testing.T) {
 	if resp := e.post(t, "/sync", nil); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("an action without logging in: %s", resp.Status)
 	}
-	start := time.Now()
 	if resp := e.post(t, "/login", url.Values{"user": {"abd"}, "password": {"nope"}}); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("wrong password: %s", resp.Status)
-	}
-	if time.Since(start) < time.Second {
-		t.Fatal("a failed login answered at once")
 	}
 
 	e.login(t)
@@ -185,6 +181,7 @@ func TestFeedForm(t *testing.T) {
 	e.login(t)
 	for _, f := range []url.Values{
 		{"name": {"x"}, "address": {"me@school.fr"}, "url": {"file:///etc/passwd"}},
+		{"name": {"x"}, "address": {"me@school.fr"}, "url": {"http://couchdb:5984/_all_dbs"}},
 		{"name": {"x"}, "address": {"not an address"}, "url": {"https://x.test/a.ics"}},
 		{"name": {""}, "address": {"me@school.fr"}, "url": {"https://x.test/a.ics"}},
 	} {
@@ -269,9 +266,9 @@ func TestProviderSettings(t *testing.T) {
 	}
 
 	// Microsoft: its secret's ID instead of its value is refused; the directory is kept as typed, in lower case.
-	const app = "11111111-2222-4333-8444-555555555555"
+	const app = "0f1e2d3c-4b5a-4697-8a1b-2c3d4e5f6a7b"
 	if resp := e.post(t, "/settings/microsoft", url.Values{"client_id": {app},
-		"client_secret": {"66666666-7777-4888-9999-aaaaaaaaaaaa"}}); resp.StatusCode != http.StatusBadRequest {
+		"client_secret": {"3c2b1a09-8f7e-4d6c-b5a4-938271605f4e"}}); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("secret ID taken as the secret: %s", resp.Status)
 	}
 	settle("microsoft", url.Values{"client_id": {app}, "client_secret": {"abc8Q~value"}, "tenant": {"School.example"}}, "/?ok=microsoft-set")
@@ -434,5 +431,139 @@ func TestTrash(t *testing.T) {
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(b), "plus là") {
 		t.Fatalf("restoring what is gone: %s\n%s", resp.Status, b)
+	}
+}
+
+// Guesses are counted, by address and for the whole page, before the password is compared (security review,
+// 2026-11-05).
+func TestLoginLimit(t *testing.T) {
+	e := setup(t, offline(t), "/dav/calendars/abd/", "abd@bench.test", nil)
+	try := func(from, password string) int {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodPost, e.srv.URL+"/login",
+			strings.NewReader(url.Values{"user": {"abd"}, "password": {password}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Forwarded-For", from) // what Caddy sends: the test's requests come from 127.0.0.1
+		resp, err := e.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	// A good login gives its try back.
+	for range perIP - 1 {
+		if got := try("203.0.113.7", "nope"); got != http.StatusUnauthorized {
+			t.Fatalf("wrong password: %d", got)
+		}
+	}
+	if got := try("203.0.113.7", "secret"); got != http.StatusSeeOther {
+		t.Fatalf("right password: %d", got)
+	}
+	if got := try("203.0.113.7", "nope"); got != http.StatusUnauthorized {
+		t.Fatalf("the tenth try: %d", got)
+	}
+	// Past the limit nothing is compared, not even the right password.
+	if got := try("203.0.113.7", "secret"); got != http.StatusTooManyRequests {
+		t.Fatalf("eleventh try: %d", got)
+	}
+	if got := try("203.0.113.8", "secret"); got != http.StatusSeeOther {
+		t.Fatalf("another address: %d", got)
+	}
+	// One IPv6 machine has a /64 of them.
+	for i := range perIP {
+		try(fmt.Sprintf("2001:db8:1:2::%x", i+1), "nope")
+	}
+	if got := try("2001:db8:1:2:ffff::1", "secret"); got != http.StatusTooManyRequests {
+		t.Fatalf("same /64: %d", got)
+	}
+	// From many addresses: the whole page.
+	for i := range global {
+		try(fmt.Sprintf("198.51.100.%d", i), "nope")
+	}
+	if got := try("192.0.2.1", "secret"); got != http.StatusTooManyRequests {
+		t.Fatalf("past the global limit: %d", got)
+	}
+}
+
+func TestLimiterWindows(t *testing.T) {
+	var l limiter
+	now := time.Date(2026, 11, 6, 10, 0, 0, 0, time.UTC)
+	for range perIP {
+		if _, _, ok, _ := l.take("a", now); !ok {
+			t.Fatal("refused too early")
+		}
+	}
+	_, wait, ok, first := l.take("a", now.Add(time.Minute))
+	if ok || !first || wait != perIPWindow-time.Minute {
+		t.Fatalf("over: ok %v first %v wait %v", ok, first, wait)
+	}
+	if _, _, _, first := l.take("a", now.Add(2*time.Minute)); first {
+		t.Fatal("logged twice")
+	}
+	if _, _, ok, _ := l.take("a", now.Add(perIPWindow+time.Second)); !ok {
+		t.Fatal("still refused after the window")
+	}
+}
+
+func TestClientAddr(t *testing.T) {
+	for _, tc := range []struct{ remote, xff, want string }{
+		{"172.18.0.3:4000", "203.0.113.7", "203.0.113.7"},           // Caddy
+		{"172.18.0.3:4000", "10.0.0.1, 203.0.113.7", "203.0.113.7"}, // its own entry is the last
+		{"203.0.113.9:4000", "198.51.100.1", "203.0.113.9"},         // not from a proxy: not believed
+		{"172.18.0.3:4000", "", "172.18.0.3"},
+		{"[2001:db8:1:2::5]:4000", "", "2001:db8:1:2::/64"},
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/login", nil)
+		r.RemoteAddr = tc.remote
+		if tc.xff != "" {
+			r.Header.Set("X-Forwarded-For", tc.xff)
+		}
+		if got := clientAddr(r); got != tc.want {
+			t.Errorf("%s %q: %s", tc.remote, tc.xff, got)
+		}
+	}
+}
+
+// Every session ends on "Se déconnecter partout", and when the password changes (security review, 2026-11-05).
+func TestLogoutEverywhere(t *testing.T) {
+	e := setup(t, offline(t), "/dav/calendars/abd/", "abd@bench.test", nil)
+	e.login(t)
+	other := e
+	jar, _ := cookiejar.New(nil)
+	other.client = &http.Client{Jar: jar, CheckRedirect: e.client.CheckRedirect}
+	other.login(t)
+	if _, body := e.get(t, "/"); !strings.Contains(body, `action="/logout-everywhere"`) {
+		t.Fatal("no button")
+	}
+	if resp := e.post(t, "/logout-everywhere", nil); resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/login" {
+		t.Fatalf("logout everywhere: %s", resp.Status)
+	}
+	for _, c := range []env{e, other} {
+		if resp, _ := c.get(t, "/"); resp.StatusCode != http.StatusSeeOther {
+			t.Fatal("a session outlived logging out everywhere")
+		}
+	}
+	other.login(t)
+
+	// The same database after a restart: the session stays; with another password, it doesn't.
+	u, _ := url.Parse(e.srv.URL)
+	cookies := other.client.Jar.Cookies(u)
+	for password, valid := range map[string]bool{"secret": true, "changed": false} {
+		s := &Server{Engine: e.server.Engine, Store: e.store, Kinds: e.server.Kinds, BaseURL: "http://cal.test", User: "abd",
+			Password: password, Log: e.server.Log}
+		h, err := s.Handler(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		for _, c := range cookies {
+			r.AddCookie(c)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if (w.Code == http.StatusOK) != valid {
+			t.Errorf("password %q: %d", password, w.Code)
+		}
 	}
 }

@@ -92,3 +92,63 @@ func TestItemsAndSettings(t *testing.T) {
 		t.Fatal(v)
 	}
 }
+
+// A refresh token serves once and is then kept as used, so a second use is seen; registrations nobody signs in with
+// go after an hour (security review, 2026-11-05).
+func TestOAuthTokens(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "backend.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	now := time.Now().Truncate(time.Second)
+	for _, id := range []string{"claude", "other"} {
+		if err := st.AddOAuthClient(ctx, OAuthClient{ID: id, RedirectURIs: []string{"https://x"}, Created: now.Add(-2 * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.AddOAuthToken(ctx, OAuthToken{Hash: "r1", Kind: "refresh", ClientID: "claude", Expires: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UseRefreshToken(ctx, "r1", "other", now); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another client's: %v", err)
+	}
+	if tok, err := st.UseRefreshToken(ctx, "r1", "claude", now); err != nil || tok.Kind != "used" {
+		t.Fatalf("first use: %+v %v", tok, err)
+	}
+	if c, _ := st.OAuthClient(ctx, "claude"); c.Signed {
+		t.Fatal("a used refresh token alone counts as signed in")
+	}
+	if tok, err := st.UseRefreshToken(ctx, "r1", "claude", now.Add(time.Minute)); !errors.Is(err, ErrUsed) || !tok.Used.Equal(now) {
+		t.Fatalf("second use: %+v %v", tok, err)
+	}
+	if _, err := st.OAuthToken(ctx, "r1", "refresh", now); !errors.Is(err, ErrNotFound) {
+		t.Fatal("a used refresh token still serves")
+	}
+	if _, err := st.UseRefreshToken(ctx, "r1", "claude", now.Add(2*time.Hour)); !errors.Is(err, ErrUsed) {
+		t.Fatal("past its expiry, before the prune: still seen as used")
+	}
+	if _, err := st.UseRefreshToken(ctx, "nope", "claude", now); !errors.Is(err, ErrNotFound) {
+		t.Fatal("unknown")
+	}
+	st.AddOAuthToken(ctx, OAuthToken{Hash: "a1", Kind: "access", ClientID: "claude", Expires: now.Add(time.Hour)})
+	if err := st.DeleteOAuthTokens(ctx, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.OAuthToken(ctx, "a1", "access", now); !errors.Is(err, ErrNotFound) {
+		t.Fatal("signed out, its access token still serves")
+	}
+
+	// "claude" was used, "other" never was: registered two hours ago, it goes.
+	st.TouchOAuthClient(ctx, "claude", now)
+	if err := st.PruneOAuth(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.OAuthClient(ctx, "other"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("a registration nobody signed in with stayed past an hour")
+	}
+	if _, err := st.OAuthClient(ctx, "claude"); err != nil {
+		t.Fatal(err)
+	}
+}

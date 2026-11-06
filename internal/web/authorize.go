@@ -32,8 +32,11 @@ const (
 	accessLife  = time.Hour
 	refreshLife = 90 * 24 * time.Hour
 	codeLife    = 10 * time.Minute
-	// maxUnsigned: registrations nobody signed in with yet; more are refused until PruneOAuth drops them (a day).
+	// maxUnsigned: registrations nobody signed in with yet; more are refused until PruneOAuth drops them (an hour).
 	maxUnsigned = 20
+	// reuseGrace: a refresh token used again this soon is a request sent twice (a retry, two of Claude's at once),
+	// refused; later, a copy in someone else's hands, and the client is signed out.
+	reuseGrace = 30 * time.Second
 )
 
 // claudeCallbacks are Claude's OAuth callbacks (Anthropic says the claude.com one may replace the other).
@@ -154,7 +157,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if unsigned >= maxUnsigned {
-		oauthError(w, http.StatusTooManyRequests, "invalid_client_metadata", "too many registrations, try again tomorrow")
+		oauthError(w, http.StatusTooManyRequests, "invalid_client_metadata", "too many registrations, try again in an hour")
 		return
 	}
 	name := strings.TrimSpace(req.ClientName)
@@ -376,11 +379,27 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "refresh_token":
-		t, err := s.Store.TakeOAuthToken(ctx, hashToken(r.PostFormValue("refresh_token")), "refresh", time.Now())
-		if errors.Is(err, store.ErrNotFound) || err == nil && t.ClientID != c.ID {
+		// A refresh token serves once. Used again, it was copied (security review, 2026-11-05: a stolen one kept
+		// working for 90 days, and the client it was stolen from was only signed out at its next refresh): every
+		// token of the client goes, the thief's and the client's alike, and it shows signed out on the page.
+		now := time.Now()
+		t, err := s.Store.UseRefreshToken(ctx, hashToken(r.PostFormValue("refresh_token")), c.ID, now)
+		switch {
+		case errors.Is(err, store.ErrUsed):
+			if now.Sub(t.Used) > reuseGrace {
+				s.Log.Warn("connector: a refresh token was used twice, its client is signed out", "client", c.ID,
+					"from", clientAddr(r))
+				if err := s.Store.DeleteOAuthTokens(ctx, c.ID); err != nil {
+					s.oauthFail(w, err)
+					return
+				}
+			}
 			oauthError(w, http.StatusBadRequest, "invalid_grant", "unknown, used or expired refresh token")
 			return
-		} else if err != nil {
+		case errors.Is(err, store.ErrNotFound):
+			oauthError(w, http.StatusBadRequest, "invalid_grant", "unknown, used or expired refresh token")
+			return
+		case err != nil:
 			s.oauthFail(w, err)
 			return
 		}
@@ -446,7 +465,7 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/?ok=claude-revoked#claude", http.StatusSeeOther)
 }
 
-// claudeRows are the clients I signed in (registrations nobody signed in with go in a day).
+// claudeRows are the clients I signed in (registrations nobody signed in with go in an hour).
 func (s *Server) claudeRows(ctx context.Context) ([]claudeRow, error) {
 	list, err := s.Store.OAuthClients(ctx)
 	var rows []claudeRow

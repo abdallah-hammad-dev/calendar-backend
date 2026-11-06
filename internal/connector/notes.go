@@ -49,11 +49,11 @@ func (c *Connector) noteTools(s *mcp.Server) {
 			"vault_read gave: refused if it changed since). For a change inside a note, vault_edit. Never a task note: " +
 			"tasks are made with task_create; a task note's properties and an event note's times aren't changed here."},
 		c.vaultWrite)
-	add(c, s, &mcp.Tool{Name: "vault_edit", Annotations: changes("Edit a note", false),
+	add(c, s, &mcp.Tool{Name: "vault_edit", Annotations: changes("Edit a note", true),
 		Description: "Replaces exact text in a note, as Claude Code's Edit: oldText must be there once (or replaceAll). In a " +
 			"task note only the body changes here (its properties are task_update's)."},
 		c.vaultEdit)
-	add(c, s, &mcp.Tool{Name: "vault_move", Annotations: changes("Move or rename a note", false),
+	add(c, s, &mcp.Tool{Name: "vault_move", Annotations: changes("Move or rename a note", true),
 		Description: "Moves or renames a note, a file or a folder, and rewrites the links to it in every other note (as " +
 			"Obsidian does). A task note can change folder, not name (rename the task with task_update)."},
 		c.vaultMove)
@@ -62,7 +62,7 @@ func (c *Connector) noteTools(s *mcp.Server) {
 			"brings it back). A task's note goes with its task (task_delete, deleteNote), or once its task is deleted. Ask the " +
 			"user first."},
 		c.vaultDelete)
-	add(c, s, &mcp.Tool{Name: "vault_restore", Annotations: changes("Restore a note", false),
+	add(c, s, &mcp.Tool{Name: "vault_restore", Annotations: changes("Restore a note", true),
 		Description: "Without an id: what can be restored, the last first: deleted notes (the trash) and the versions changes " +
 			"replaced (kept 30 days), optionally for one path. With an id: shows it (show) or restores it."},
 		c.vaultRestore)

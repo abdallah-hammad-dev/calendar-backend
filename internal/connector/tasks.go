@@ -37,7 +37,7 @@ func (c *Connector) taskTools(s *mcp.Server) {
 			"(a line \"- [[Title]]\" shows its checkbox). `due` is the deadline; to block time for it, task_schedule. A step " +
 			"inside a task is a \"- [ ]\" line in its note; a step with its own deadline is a sub-task (`parent`)."},
 		c.createTask)
-	add(c, s, &mcp.Tool{Name: "task_update", Annotations: changes("Change a task", false),
+	add(c, s, &mcp.Tool{Name: "task_update", Annotations: changes("Change a task", true),
 		InputSchema: schema[taskUpdateIn](map[string][]any{"priority": {"high", "medium", "low", ""}}),
 		Description: "Changes a task: tick it (done), rename it (the extension renames its note), its deadline, repetition, " +
 			"priority, tags, parent, collection, and its text (`notes`) while it has no note yet (tasks_list shows them; once " +

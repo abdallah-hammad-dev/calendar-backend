@@ -91,8 +91,9 @@ backend must write. This repo is private.
   own items: the engine touches only the hrefs in `items`.
 - `internal/store` — SQLite (modernc, no cgo): `accounts` (with their collection), `collections` (sync tokens),
   `items` (source data, Davis href/etag, partstat written, answer in flight, what the relay sent and wrote, the
-  trash: `trashed`, `removed` dates), `settings` (the page's session key). Migrations by `PRAGMA user_version`
-  (`schema.sql` … `schema4.sql`, the connector's OAuth clients and tokens); deployed: never edit one, add the next.
+  trash: `trashed`, `removed` dates), `settings` (the page's session key and `session_gen`). Migrations by
+  `PRAGMA user_version` (`schema.sql` … `schema5.sql`; 4 and 5: the connector's OAuth clients and tokens, used
+  refresh tokens kept to see a second use); deployed: never edit one, add the next.
 - `deploy/` — the VPS's `compose.yaml` (Caddy, Davis, backend, CouchDB, livesync-bridge under the profile `vault`,
   the one-shot `owner`), `Caddyfile`, `couchdb.ini` (LiveSync's settings; owned by CouchDB's uid 5984 on the VPS, or
   its entrypoint fails), `update` (CI's only command). The backend runs as the bridge's uid 1993 (both write the
@@ -105,6 +106,10 @@ backend must write. This repo is private.
 - Davis's `LOG_FILE_PATH` stays `/dev/null`: its error log copies the request's headers, the password included.
 - Errors that may carry a feed URL go through `scrub` (`internal/adapter/icsfeed`): Go's `*url.Error` repeats the
   whole URL, secret included.
+- Feeds are fetched by https only and from public addresses only (`icsfeed.defaultHTTP`, `CheckURL`): never give a
+  production `Feed` another client or `Files`. Sources never write the backend's `X-CALTASKS-*` nor alarms (`Base`).
+- The page's login counts tries before comparing the password (`web/limit.go`); sessions end with the password or
+  `session_gen`. Connector tools: anything but adding is `destructive`; events written by others carry `fromOthers`.
 - Write times with `TZID` + `VTIMEZONE`, never UTC (iOS shows a second "(GMT)" time).
 - Compare only `PARTSTAT` on my `ATTENDEE` (iOS rewrites the other parameters).
 - Bench tests write only to bench users (`abd`, `orga`) and delete what they create; the user's real collections on

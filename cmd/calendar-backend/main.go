@@ -22,6 +22,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/accounts"
+	"github.com/abdallah-hammad-dev/calendar-backend/internal/adapter/icsfeed"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/config"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/connector"
 	"github.com/abdallah-hammad-dev/calendar-backend/internal/davis"
@@ -129,7 +130,11 @@ func run(ctx context.Context, envFile, cmd string, args []string) error {
 		if err != nil {
 			return err
 		}
-		srv := &http.Server{Addr: cfg.Listen, Handler: h, ReadHeaderTimeout: 10 * time.Second}
+		// Every connection has an end (security review, 2026-11-05: only the headers had one, so slow clients could
+		// hold connections and memory, an MCP body being up to 8 MB). Writing allows the longest tool call: a
+		// connector call can make several Davis requests, each given up after 2 minutes.
+		srv := &http.Server{Addr: cfg.Listen, Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: time.Minute,
+			WriteTimeout: 5 * time.Minute, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
 		served := make(chan error, 1)
 		go func() { served <- srv.ListenAndServe() }()
 		go func() {
@@ -155,11 +160,14 @@ func run(ctx context.Context, envFile, cmd string, args []string) error {
 		fs := flag.NewFlagSet("add-feed", flag.ExitOnError)
 		name := fs.String("name", "", "the account's name")
 		address := fs.String("address", "", "my address in it, if I'm invited there (optional)")
-		url := fs.String("url", "", "the feed: https://…, webcal://… or file:///…")
+		url := fs.String("url", "", "the feed: https://… or webcal://…")
 		collection := fs.String("collection", "", "the collection of mine its events go into, by name or href")
 		fs.Parse(args)
 		if *name == "" || *url == "" || *collection == "" {
 			return errors.New("add-feed: -name, -url and -collection are required")
+		}
+		if err := icsfeed.CheckURL(*url); err != nil {
+			return err
 		}
 		conf, _ := json.Marshal(accounts.FeedConfig{URL: *url})
 		a, err := e.AddAccount(ctx, store.Account{Kind: "ics", Name: *name, Address: *address, Config: string(conf)}, *collection)

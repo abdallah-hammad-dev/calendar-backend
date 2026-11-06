@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,6 +21,8 @@ const (
 	PropSourceAccount  = "X-CALTASKS-SOURCE-ACCOUNT"  // which account; what makes an event a mirror for the extension
 	PropSourceAttendee = "X-CALTASKS-SOURCE-ATTENDEE" // the address that was invited, my ATTENDEE being the Davis one
 	PropRSVPState      = "X-CALTASKS-RSVP-STATE"      // pending / confirmed / failed:<reason>, written by the relay
+
+	backendPrefix = "X-CALTASKS-" // the backend's and the extension's own properties: never taken from a source
 )
 
 // Target is what a mirror event is written for.
@@ -40,12 +43,16 @@ type Target struct {
 // When the ORGANIZER is me (an event I organize on that account), my ATTENDEE is left alone: it isn't an
 // invitation, and making me an attendee would show me Accept / Decline on my own event. The ORGANIZER is never
 // rewritten to the Davis address, or Davis would start sending invitations itself (part 2, spec §9).
+//
+// What only the backend writes never comes from a source (2026-11-05, security review): its X-CALTASKS-*
+// properties (anyone can send me an invitation carrying X-CALTASKS-SEND-ACCOUNT, which part 2 will act on), nor
+// alarms (a stranger's invitation ringing my phone). The alarms on a copy are the ones I add there (Merge).
 func Base(src *ical.Calendar, invited, answer string, t Target) *ical.Calendar {
 	out := ical.NewCalendar()
 	out.Props.SetText(ical.PropVersion, "2.0")
 	out.Props.SetText(ical.PropProductID, ics.ProdID)
 	for name, props := range src.Props {
-		if strings.HasPrefix(name, "X-") {
+		if strings.HasPrefix(name, "X-") && !strings.HasPrefix(name, backendPrefix) {
 			out.Props[name] = props // X-WR-TIMEZONE and the like; METHOD, PRODID, CALSCALE are dropped
 		}
 	}
@@ -56,8 +63,12 @@ func Base(src *ical.Calendar, invited, answer string, t Target) *ical.Calendar {
 	}
 
 	for _, ev := range ics.Events(out) {
-		ev.Props.Del(PropRSVPState)
-		ev.Props.Del(PropSourceAttendee)
+		for name := range ev.Props {
+			if strings.HasPrefix(name, backendPrefix) {
+				ev.Props.Del(name)
+			}
+		}
+		ev.Children = slices.DeleteFunc(ev.Children, func(c *ical.Component) bool { return c.Name == ical.CompAlarm })
 		ics.SetText(ev, PropSourceAccount, t.Account)
 
 		organizer := ics.Address(ics.Value(ev, ical.PropOrganizer))

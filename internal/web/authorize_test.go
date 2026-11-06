@@ -214,7 +214,8 @@ func TestConnectorSignIn(t *testing.T) {
 	}
 	if resp, _ := e.tokenCall(t, again); resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("refresh token used twice: %s", resp.Status)
-	}
+	} // at once: a request sent twice, nothing more
+
 	if resp, _ := e.callMCP(t, tok2["access_token"].(string)); resp.StatusCode != http.StatusOK {
 		t.Fatalf("mcp after refresh: %s", resp.Status)
 	}
@@ -228,6 +229,21 @@ func TestConnectorSignIn(t *testing.T) {
 	if !strings.Contains(body, "/claude/"+client+"/revoke") {
 		t.Fatal("the accounts page doesn't list the connector")
 	}
+	// A refresh token used again later than a retry would be: a copy someone else holds. The client is signed out.
+	r2 := tok2["refresh_token"].(string)
+	if _, err := e.store.UseRefreshToken(context.Background(), hashToken(r2), client, time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if resp, out := e.tokenCall(t, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {r2}, "client_id": {client}}); resp.StatusCode != http.StatusBadRequest || out["error"] != "invalid_grant" {
+		t.Fatalf("stolen refresh token: %s %v", resp.Status, out)
+	}
+	if resp, _ := e.callMCP(t, tok2["access_token"].(string)); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("mcp after a refresh token's reuse: %s", resp.Status)
+	}
+	if c, err := e.store.OAuthClient(context.Background(), client); err != nil || c.Signed {
+		t.Fatalf("still signed in: %+v %v", c, err)
+	}
+
 	if resp := e.post(t, "/claude/"+client+"/revoke", nil); resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("revoke: %s", resp.Status)
 	}
