@@ -17,21 +17,14 @@ dashboard (`http://127.0.0.1:9000/dashboard`). Pour Radicale : `COLL=http://loca
 
 ## Réseau
 
-WSL est en NAT : Tailscale est installé **dans WSL** (nœud `pc`). iOS exige HTTPS (sans SSL il n'envoie pas
-le mot de passe et ignore le port), fourni par Tailscale Serve avec un vrai certificat (config persistante) :
-
-```bash
-sudo tailscale serve --bg --https=8443 9000   # Davis    → https://pc.example.ts.net:8443/dav/
-sudo tailscale serve --bg 5232                # Radicale → https://pc.example.ts.net/
-tailscale serve status
-```
+iOS exige HTTPS (sans SSL il n'envoie pas le mot de passe et ignore le port) : l'iPhone ne joint pas ce banc local.
+Les essais sur l'iPhone se font sur le serveur déployé (`https://cal.<domaine>/dav/`).
 
 ## iPhone
 
 Réglages → Apps → Calendrier → Comptes calendrier → Ajouter un compte → Autre → Compte CalDAV :
 
-- Serveur : `https://pc.example.ts.net:8443/dav/` (le `:8443` est obligatoire, sinon iOS tombe sur
-  Radicale), utilisateur `abd`, mot de passe `x`.
+- Serveur : `https://cal.<domaine>/dav/`, ton utilisateur Davis et son mot de passe.
 - Activer **Calendriers et Rappels**. Dans Calendrier, activer « Rappels programmés ».
 - Test réseau : l'URL dans Safari doit répondre (page Davis).
 - Les changements serveur arrivent à la prochaine synchro iOS : tirer vers le bas pour forcer.
@@ -56,7 +49,7 @@ boutons, l'affichage des invitations sera seulement dans Obsidian.
 
 | # | Résultat |
 |---|---|
-| Accès | iOS exige HTTPS : sans SSL il n'envoie pas le mot de passe et ignore le port. Résolu avec `tailscale serve`. |
+| Accès | iOS exige HTTPS : sans SSL il n'envoie pas le mot de passe et ignore le port. Résolu avec un proxy HTTPS devant le banc. |
 | Collection mixte | Une collection VEVENT + VTODO apparaît dans Calendrier **et** Rappels. |
 | 1 | ✅ Un rappel daté et horaire apparaît dans Calendrier (« Rappels programmés »). |
 | 2 | ✅ Cocher écrit `STATUS:COMPLETED`, `COMPLETED:…`, `PERCENT-COMPLETE:100`. |
@@ -69,9 +62,8 @@ boutons, l'affichage des invitations sera seulement dans Obsidian.
 
 ## Davis (sabre/dav) — test des invitations (2026-10-15)
 
-Banc : `../davis/` (`run.sh`, Podman, `davis.env` avec le mot de passe admin), exposé par
-`sudo tailscale serve --bg --https=8443 9000` → compte iPhone `https://pc.example.ts.net:8443/dav/`
-(le `:8443` est obligatoire, sinon iOS tombe sur Radicale). Utilisateurs : `abd` (abd@bench.test), `orga`
+Banc : `../davis/` (`run.sh`, Podman, `davis.env` avec le mot de passe admin), exposé en HTTPS pour l'iPhone.
+Utilisateurs : `abd` (abd@bench.test), `orga`
 (organisateur@bench.test), mot de passe `x`. Aucun mail : `INVITE_FROM_ADDRESS` vide.
 
 | Cas | Résultat |

@@ -10,7 +10,6 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 env_file=deploy/.env
-repo=abdallah-hammad-dev/calendar-backend
 new_key=false
 case ${1-} in
   "") ;;
@@ -51,10 +50,16 @@ made() { [[ -n $(get "$1") ]] || put "$1" "$(random)"; }
 optional() { grep -q "^$1=" "$env_file" || put "$1" "${2-}"; }
 
 step "Réglages (deploy/.env)"
-ask VPS "Hôte SSH du VPS" my-vps
-ask DOMAIN "Domaine (cal., sync. et accounts. en dessous)" my.example.com
+# This repository on GitHub (CI's secrets, the image's registry): origin's, unless told otherwise.
+origin=""
+if [[ $(git remote get-url origin 2>/dev/null || true) =~ github\.com[:/]([^/]+/[^/]+)$ ]]; then
+  origin=${BASH_REMATCH[1]%.git}
+fi
+ask GITHUB_REPO "Dépôt GitHub de ce backend (propriétaire/nom)" "$origin"
+ask VPS "Hôte SSH du VPS"
+ask DOMAIN "Domaine (cal., sync. et accounts. en dessous)"
 ask ACME_EMAIL "Adresse pour Let's Encrypt (avis sur les certificats)" "$(git config user.email || true)"
-ask DAVIS_USER "Ton utilisateur Davis (iPhone, Obsidian, page des comptes)" abd
+ask DAVIS_USER "Ton utilisateur Davis (iPhone, Obsidian, page des comptes)"
 ask DAVIS_EMAIL "Ton adresse dans Davis (celle de tes invitations)" "$(get ACME_EMAIL)"
 if [[ -z $(get DAVIS_PASSWORD) ]]; then
   read -r -s -p "  Mot de passe Davis (vide = j'en fais un ; 16 caractères au moins : lettres, chiffres, . _ -) : " v
@@ -97,13 +102,16 @@ fi
 # Compose reads $ in .env, and quotes would be kept: none of them, nor backslashes.
 bad=$(grep -nE '^[A-Z_]+=.*[$"'"'"'`\\]' "$env_file" | cut -d= -f1 || true)
 [[ -z $bad ]] || die "deploy/.env : pas de \$, de guillemets ni de \\ dans les valeurs (ligne $bad)"
-for k in VPS DOMAIN ACME_EMAIL DAVIS_USER DAVIS_EMAIL DAVIS_PASSWORD COUCHDB_USER COUCHDB_PASSWORD LIVESYNC_DATABASE; do
+for k in GITHUB_REPO VPS DOMAIN ACME_EMAIL DAVIS_USER DAVIS_EMAIL DAVIS_PASSWORD COUCHDB_USER COUCHDB_PASSWORD LIVESYNC_DATABASE; do
   printf -v "$k" '%s' "$(get "$k")"
 done
+repo=$GITHUB_REPO
 
 # --- Before touching the VPS -------------------------------------------------------------------------------------
 
 step "Vérifications avant de toucher au VPS"
+# GitHub's own names; the registry (deploy/update) wants them in lowercase.
+[[ $GITHUB_REPO =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "GITHUB_REPO : « $GITHUB_REPO » n'est pas propriétaire/nom"
 [[ $DOMAIN =~ ^([a-z0-9-]+\.)+[a-z]{2,}$ ]] || die "DOMAIN : « $DOMAIN » n'est pas un domaine"
 for k in ACME_EMAIL DAVIS_EMAIL; do
   [[ ${!k} =~ ^[^@[:space:]]+@[^@[:space:]]+\.[a-z]{2,}$ ]] || die "$k : « ${!k} » n'est pas une adresse"

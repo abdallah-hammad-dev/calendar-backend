@@ -4,7 +4,8 @@ Server side of the Obsidian extension calendar-tasks: Davis (the CalDAV server),
 (external accounts mirrored into Davis, RSVP relay, accounts page), started at B1. **Spec: `docs/SPEC.md` (read it
 first)**; tested facts: `bench/TESTS.md`. The extension lives in `../calendar-tasks` (public repo
 https://github.com/abdallah-hammad-dev/calendar-tasks); its `docs/SPEC.md` §4.5–4.6 and §7.1 define what the
-backend must write. This repo is private.
+backend must write. This repo is public: my VPS, domain and addresses live in `deploy/.env` (git-ignored), never in
+tracked files.
 
 ## State (2026-10-28)
 
@@ -13,16 +14,16 @@ backend must write. This repo is private.
 - B2–B5 coded (2026-10-23): Google and Microsoft adapters, the RSVP relay, the accounts page (`run` serves it).
   Tested on API answers shaped from the references (adapters) and against the bench Davis (relay, page); **not yet
   on real accounts**: spec §12 lists what to check first.
-- **Deployed 2026-10-29** (spec §8) on `my-vps` (hosts nothing else): `cal.` / `sync.` /
-  `accounts.my.example.com`, Let's Encrypt certificates, my Davis user `abd`. Each push on `main`
+- **Deployed 2026-10-29** (spec §8) on my VPS (hosts nothing else; its SSH host and domain: `deploy/.env`):
+  `cal.` / `sync.` / `accounts.<domain>`, Let's Encrypt certificates. Each push on `main`
   deploys the backend (CI, ~2 min). The VPS's sudo is sudo-rs (Ubuntu 26.04).
 - Next: the iPhone, Obsidian and LiveSync on the real addresses; the Google Cloud project and the Entra app
   (`docs/comptes.md`) into `deploy/.env` then `./deploy.sh`; test on real accounts and fix. Not done: backups,
   moving my data from the bench. Open questions in spec §12 are the user's to answer.
 - B8, the Claude connector (spec §10), coded 2026-11-04: an MCP endpoint in the backend (`/mcp`, its own OAuth)
   writes tasks / events into Davis and notes into the vault livesync-bridge mirrors on the VPS. **Deployed the same
-  day**: the bridge on `my-vault` (after a copy), the mirror checked against the PC's vault. Next: the connector
-  added on claude.ai, then tried from the phone's app.
+  day**: the bridge on my LiveSync database (after a copy), the mirror checked against the PC's vault. Next: the
+  connector added on claude.ai, then tried from the phone's app.
 
 ## New machine
 
@@ -30,7 +31,7 @@ backend must write. This repo is private.
 2. `cp davis/davis.env.example davis/davis.env`, fill `APP_SECRET` (`openssl rand -hex 16`) and `ADMIN_PASSWORD`.
 3. `davis/run.sh` (rootless Podman, `127.0.0.1:9000`), then create the bench users in the dashboard
    (`http://127.0.0.1:9000/dashboard`): `abd` (abd@bench.test) and `orga` (organisateur@bench.test), password `x`.
-4. The iPhone reaches the bench through Tailscale Serve (HTTPS required by iOS), see `bench/TESTS.md`.
+4. The iPhone needs HTTPS, so it uses the deployed server, not the bench (`bench/TESTS.md`).
 
 ## Commands
 
@@ -123,6 +124,8 @@ backend must write. This repo is private.
   doesn't carry it from the Davis copy (a client's new answer clears it).
 - The Graph adapter follows next / delta links only under its base URL: the OAuth client adds the account's token
   to any URL it calls.
+- Public repo: no personal host, domain, address or secret in tracked files (`deploy.sh` asks for them and keeps
+  them in `deploy/.env`).
 - Commit and push only when the user says so; a push on `main` also deploys the backend.
 - CI's key on the VPS runs `deploy/update` and nothing else: keep that script checking its input, never give the
   `deploy` user more. Davis's dashboard and CouchDB's `/_utils` stay off the internet.

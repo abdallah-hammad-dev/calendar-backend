@@ -260,7 +260,7 @@ The provider then notifies the organizer from the invited address, and the next 
   a link made the extension depend on the backend, and accounts are added rarely).
 - Lists each account with its state (last sync, last error); remove an account (and its events, after asking).
 - **Corbeille**: the events and dates I deleted, the last first, each with Restaurer (§5.4).
-- **Login with the Davis user** (2026-10-23, B4, `internal/web`), instead of Cloudflare Access or Tailscale: one
+- **Login with the Davis user** (2026-10-23, B4, `internal/web`), instead of Cloudflare Access or a VPN: one
   backend per person, so one login, the one on the iPhone. Signed session cookie (30 days), `CrossOriginProtection`
   against other sites' posts, no framing, no caching, no referrer. Hardened 2026-11-06 (security review: this
   password also opens the connector's consent, so the vault):
@@ -287,7 +287,7 @@ The provider then notifies the organizer from the invited address, and the next 
 
 ## 8. Deployment
 
-- **Where**: my VPS (`my-vps`, Ubuntu 26.04, 2 CPU, 3.7 GB), which hosts nothing else (2026-10-28, the user:
+- **Where**: my VPS (Ubuntu 26.04, 2 CPU, 3.7 GB), which hosts nothing else (2026-10-28, the user:
   no Minecraft server nor website there any more); only SSH listened when checked, Docker not installed yet.
 - **Domain** at Cloudflare, subdomains such as `cal.` (Davis) and one for the backend; HTTPS with Let's Encrypt
   (also required for OAuth redirect URIs outside localhost).
@@ -299,7 +299,7 @@ The provider then notifies the organizer from the invited address, and the next 
   address the backend writes as my `ATTENDEE`.
 - **No Davis log file** (`LOG_FILE_PATH=/dev/null`): on every error it writes the whole request, the Basic password
   included (`bench/TESTS.md`, 2026-10-28). Its database keeps only an MD5-based hash, so long random passwords.
-- The iPhone account then points to `https://cal.<domain>/dav/` instead of the Tailscale bench.
+- The iPhone account then points to `https://cal.<domain>/dav/` instead of the local bench.
 - **Decided 2026-10-23, for the deployment step:**
   - Everything needed for the calendar *and* the Obsidian vault's sync lives in this repo (the user: "tout ce qu'il
     faut pour avoir le calendrier, le sync obsidian"): the vault syncs with the **Self-hosted LiveSync** plugin
@@ -317,8 +317,8 @@ The provider then notifies the organizer from the invited address, and the next 
   - `cal.` and `sync.` "DNS only" at Cloudflare: its proxy may weaken ETags when compressing (the 412s of the bench).
 - **Built 2026-10-28, deployed 2026-10-29** (`deploy/`, `deploy.sh`, `.github/workflows/deploy.yml`; the whole
   stack first tested locally with Caddy's own certificates, `bench/TESTS.md`):
-  - Addresses under one root (the user: one root, English names): `cal.my.example.com` (Davis),
-    `sync.…` (CouchDB), `accounts.…` (the accounts page), all "DNS only". Paths under one host (`/my/cal`…) were
+  - Addresses under one root (the user: one root, English names): `cal.<domain>` (Davis),
+    `sync.<domain>` (CouchDB), `accounts.<domain>` (the accounts page), all "DNS only". Paths under one host (`/my/cal`…) were
     set aside: one origin for the accounts page and two admin UIs we didn't write, Davis's absolute hrefs, and
     `/.well-known/caldav` wanted at the host's root.
   - Public: `/dav/` and `/.well-known/caldav` on `cal.` (Davis's dashboard and API answer 404: the dashboard is
@@ -630,7 +630,7 @@ body is the vault's (§10.3). Same rules as the mirror (§5.2): times in my zone
 - **B4 — Accounts page.** *Coded 2026-10-23*, tested against the bench Davis with a fake provider.
 - **B5 — Microsoft** (personal, then school: consent test first). *Needs me: the Entra app, the school sign-in.*
   *Coded 2026-10-23* with B2; to test on my accounts.
-- **Order changed 2026-10-23** (the user: test directly on a real domain rather than localhost and Tailscale):
+- **Order changed 2026-10-23** (the user: test directly on a real domain rather than locally):
   B2–B5 coded first, then B0 and B7 together (Davis, the backend, then the vault sync, on the VPS), then tests on
   my accounts and fixes.
 - **B6 — The generic adapter** (§4, once decided).

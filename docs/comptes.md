@@ -3,7 +3,7 @@
 Une fois par serveur, avant d'ajouter des comptes sur la page des comptes. Chacun le fait pour son propre backend,
 avec ses propres comptes : rien n'est partagé.
 
-Il faut l'adresse de la page des comptes, `BASE_URL` (sur le VPS : `https://accounts.my.example.com`). L'« URI de
+Il faut l'adresse de la page des comptes, `BASE_URL` (sur le VPS : `https://accounts.<domaine>`). L'« URI de
 redirection » à donner à Google et à Microsoft est `BASE_URL/oauth/callback` ; la page l'affiche dans « Réglages ».
 Pour essayer en local, ajoute aussi `http://localhost:8080/oauth/callback` (les deux fournisseurs acceptent
 `localhost` en HTTP).
@@ -39,8 +39,8 @@ Sur <https://console.cloud.google.com>, avec ton compte Google :
    `Calendar Tasks Sync` ; ni « Google » ni une marque), ton adresse, audience **Externe** (« Interne » n'existe
    que pour Google Workspace), adresse de contact.
 4. **Branding** (exigé avant de publier) : page d'accueil `BASE_URL`, règles de confidentialité
-   `BASE_URL/privacy` (la page des comptes la sert, publique), domaine autorisé : le domaine racine (sur le VPS
-   `example.com`), pas de logo (un logo demande une validation par Google).
+   `BASE_URL/privacy` (la page des comptes la sert, publique), domaine autorisé : le domaine racine (pour
+   `accounts.cal.exemple.fr` : `exemple.fr`), pas de logo (un logo demande une validation par Google).
 5. **Accès aux données** → Ajouter ou supprimer des champs d'application : `openid`, `…/auth/userinfo.email`, et
    `https://www.googleapis.com/auth/calendar.events` (s'il n'est pas dans la liste : « Ajouter manuellement ») →
    Mettre à jour → Enregistrer.

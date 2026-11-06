@@ -6,4 +6,6 @@ radicale/.venv/
 *.log
 backend.env
 .env
+# My server's settings and secrets (deploy.sh): VPS, domain, passwords. Keep a copy somewhere safe.
+deploy/.env
 /data/

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Starts the local test servers after a reboot: Davis (Podman) and Radicale (reference), in the background.
-# Tailscale Serve keeps its config by itself (Davis on :8443, Radicale on :443).
 set -euo pipefail
 cd "$(dirname "$0")"
 podman start davis >/dev/null 2>&1 || ./davis/run.sh >/dev/null

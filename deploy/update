@@ -7,7 +7,6 @@
 # previous image comes back and this fails.
 set -euo pipefail
 
-repo=ghcr.io/abdallah-hammad-dev/calendar-backend
 digest=${1-}
 if [[ ! $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
   echo "usage: update sha256:<digest>, the registry's token on stdin" >&2
@@ -26,10 +25,20 @@ cd /opt/calendar
 exec 9>/run/calendar-update.lock
 flock -w 600 9
 
+# The image's repository: GITHUB_REPO in the .env deploy.sh wrote (root's), never from CI, so CI's key can only
+# bring this repository's images.
+github_repo=$(sed -n 's/^GITHUB_REPO=//p' .env | tail -n 1)
+github_repo=${github_repo,,}
+if [[ ! $github_repo =~ ^[a-z0-9_.-]+/[a-z0-9_.-]+$ ]]; then
+  echo "update: no GITHUB_REPO in /opt/calendar/.env (run deploy.sh again)" >&2
+  exit 2
+fi
+repo=ghcr.io/$github_repo
+
 # The token goes in a folder of its own, gone once pulled.
 creds=$(mktemp -d)
 trap 'rm -rf "$creds"' EXIT
-printf '%s' "$token" | DOCKER_CONFIG=$creds docker login ghcr.io -u abdallah-hammad-dev --password-stdin >/dev/null
+printf '%s' "$token" | DOCKER_CONFIG=$creds docker login ghcr.io -u "${github_repo%%/*}" --password-stdin >/dev/null
 DOCKER_CONFIG=$creds docker pull -q "$repo@$digest" >/dev/null
 rm -rf "$creds"
 
