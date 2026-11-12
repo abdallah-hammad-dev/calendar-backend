@@ -1,9 +1,9 @@
 // Code generated from CLDR's common/supplemental/windowsZones.xml (unicode-org/cldr, main, 2026-10-23); DO NOT EDIT.
 
-package microsoft
+package ics
 
 // windowsZones maps a Windows time zone name to its IANA zone (CLDR's "001" territory: the zone for the whole
-// name). Outlook writes Windows names in originalStartTimeZone and recurrenceTimeZone.
+// name). Outlook writes Windows names: Graph's originalStartTimeZone and recurrenceTimeZone, its feeds' TZIDs.
 var windowsZones = map[string]string{
 	"AUS Central Standard Time":       "Australia/Darwin",
 	"AUS Eastern Standard Time":       "Australia/Sydney",

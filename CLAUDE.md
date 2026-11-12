@@ -60,11 +60,13 @@ tracked files.
 - `internal/ics` — go-ical's decoder, our encoder (folding at 75 octets, sorted properties: two encodings of the
   same content compare equal), `Localize` (UTC → TZID, generated `VTIMEZONE`s from Go's zone database). Never let
   Go's map order reach the output: `Localize` read properties in map order and gave the same event another text from
-  pass to pass (2026-10-28, `TestLocalizeIsStable`).
+  pass to pass (2026-10-28, `TestLocalizeIsStable`). `OutlookZone`: Windows zone names (`windowszones.go`, generated
+  from CLDR) or IANA.
 - `internal/adapter` — the `Adapter` interface (`List(token)`, `RSVP`; `Refused` = an answer that won't go
   through, said as `failed:<reason>`), `icsfeed` (read-only ICS feed), `google` (Calendar API, sync tokens, a series
   read whole by `iCalUID`), `microsoft` (Graph `calendarView/delta` over a range, series read again from their
-  master, the token is JSON with the Graph id → UID map; `windowszones.go` is generated from CLDR).
+  master, the token is JSON with the Graph id → UID map). An Outlook feed's all-day event published from midnight
+  UTC to midnight UTC becomes all-day again (`icsfeed.allDayAgain`, 2026-11-12).
 - `internal/oauth` — sign-in with PKCE, tokens refreshed and saved back (Microsoft rotates refresh tokens),
   `SignInAgain(err)`.
 - `internal/accounts` — each kind: its adapter (signed in from the account's config), its address after sign-in.

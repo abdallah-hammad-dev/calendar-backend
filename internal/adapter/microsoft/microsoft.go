@@ -481,13 +481,7 @@ func attendeeProp(addr, name, partstat, kind string) *ical.Prop {
 // zoneOf maps a zone name as Outlook writes it (Windows, sometimes IANA) to a zone; def when it can't, or when it
 // is UTC (written as such).
 func zoneOf(name string, def *time.Location) *time.Location {
-	if iana, ok := windowsZones[name]; ok {
-		name = iana
-	}
-	if name == "Etc/UTC" || name == "Etc/GMT" {
-		return def
-	}
-	if loc := ics.Zone(name); loc != nil {
+	if loc := ics.OutlookZone(name); loc != nil {
 		return loc
 	}
 	return def

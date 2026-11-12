@@ -243,6 +243,18 @@ d'une invitation envoyée à une autre adresse, et notre `RSVP` Google refuse un
 une app de son propre annuaire. Son circuit de demande est actif : un champ de justification et un bouton « Request
 approval ». Google (Gmail) : connecté le même jour, première passe sans erreur.
 
+## Flux publié d'Outlook : une journée entière décalée (2026-11-12)
+
+Constaté sur le flux de l'école (compte Microsoft, calendrier publié) : une invitation de Luma (un événement
+du vendredi 19:00 au dimanche 18:30) est affichée par Outlook web **en journée entière** du vendredi au dimanche,
+sans heure. Le flux l'écrit en événement horaire, de minuit UTC à minuit UTC dans la zone de
+l'école : `DTSTART;TZID=Romance Standard Time:20261120T010000`, `DTEND;…:20261123T010000`,
+`X-MICROSOFT-CDO-ALLDAYEVENT:FALSE`. L'extension et l'iPhone le dessinent donc de 01:00 à 01:00. Les autres événements
+du flux (tous `ALLDAYEVENT:FALSE`, aucun en journée entière) ont leurs vraies heures. Hypothèse : Exchange garde en UTC
+la journée entière d'une invitation venue de l'extérieur, et son flux ne la reconnaît plus comme telle dans la zone de
+l'école. Graph n'a pas pu confirmer `isAllDay` (503 ce soir-là). Corrigé côté backend : `icsfeed.allDayAgain`
+(spec §4, flux ICS).
+
 ## Connecteur Claude : Davis et livesync-bridge (2026-11-04)
 
 **Davis, `calendar-query` avec `<c:expand>`** (banc, utilisateur `orga`) : chaque occurrence revient en `VEVENT` à

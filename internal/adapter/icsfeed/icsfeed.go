@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -163,6 +164,7 @@ func Split(cal *ical.Calendar) []adapter.Change {
 	}
 	var out []adapter.Change
 	for _, uid := range order {
+		allDayAgain(byUID[uid])
 		ev := ical.NewCalendar()
 		ev.Props.SetText(ical.PropVersion, "2.0")
 		ev.Props.SetText(ical.PropProductID, ics.ProdID)
@@ -188,6 +190,55 @@ func Split(cal *ical.Calendar) []adapter.Change {
 		out = append(out, adapter.Change{UID: uid, SourceID: uid, Calendar: ev})
 	}
 	return out
+}
+
+// allDayAgain undoes how Outlook's published calendar writes an all-day event Exchange keeps in UTC (an invitation
+// from outside, as Luma's: 2026-11-12): Outlook shows it all day, its feed from midnight UTC to midnight UTC in the
+// publisher's zone ("Romance Standard Time:20261120T010000" to "…1123T010000", X-MICROSOFT-CDO-ALLDAYEVENT:FALSE),
+// which every client draws from 01:00 to 01:00. Such an event becomes all-day again, on its UTC days. Outlook's
+// feeds only (the X-MICROSOFT-CDO-ALLDAYEVENT property): elsewhere, midnight UTC may be meant. Not a series:
+// its RECURRENCE-IDs, EXDATEs and UNTIL would have to change with it, and no feed has shown one yet.
+func allDayAgain(events []*ical.Component) {
+	if len(events) != 1 {
+		return
+	}
+	ev := events[0]
+	flag := ev.Props.Get("X-MICROSOFT-CDO-ALLDAYEVENT")
+	if flag == nil || ev.Props.Get(ical.PropRecurrenceID) != nil || ev.Props.Get(ical.PropRecurrenceRule) != nil ||
+		ev.Props.Get(ical.PropRecurrenceDates) != nil {
+		return
+	}
+	start, ok := utcMidnight(ev.Props.Get(ical.PropDateTimeStart))
+	end, ok2 := utcMidnight(ev.Props.Get(ical.PropDateTimeEnd))
+	if !ok || !ok2 || !end.After(start) {
+		return
+	}
+	s, _ := ics.Date(ical.PropDateTimeStart, start.Format("2006-01-02"))
+	e, _ := ics.Date(ical.PropDateTimeEnd, end.Format("2006-01-02"))
+	flag.Value = "TRUE"
+	ev.Props.Set(s)
+	ev.Props.Set(e)
+}
+
+// utcMidnight reads a date-time (in UTC, or in a zone Outlook names) and says whether it is midnight UTC. A date, a
+// floating time or a zone only its VTIMEZONE defines are not.
+func utcMidnight(p *ical.Prop) (time.Time, bool) {
+	if p == nil {
+		return time.Time{}, false
+	}
+	value, tzid, loc := p.Value, p.Params.Get(ical.PropTimezoneID), time.UTC
+	switch {
+	case strings.HasSuffix(value, "Z"):
+		value = strings.TrimSuffix(value, "Z")
+	case strings.EqualFold(tzid, "UTC"), tzid == "Etc/UTC":
+	default:
+		if loc = ics.OutlookZone(tzid); loc == nil {
+			return time.Time{}, false
+		}
+	}
+	t, err := time.ParseInLocation("20060102T150405", value, loc)
+	t = t.UTC()
+	return t, err == nil && t.Hour() == 0 && t.Minute() == 0 && t.Second() == 0
 }
 
 func (f *Feed) fetch(ctx context.Context) ([]byte, error) {

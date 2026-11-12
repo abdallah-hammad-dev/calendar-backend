@@ -69,6 +69,18 @@ func Zone(name string) *time.Location {
 	return loc
 }
 
+// OutlookZone loads a zone named as Outlook names them, the Windows way ("Romance Standard Time"), or an IANA zone;
+// nil when name is empty, UTC or unknown.
+func OutlookZone(name string) *time.Location {
+	if iana, ok := windowsZones[name]; ok {
+		name = iana
+	}
+	if name == "Etc/UTC" || name == "Etc/GMT" {
+		return nil
+	}
+	return Zone(name)
+}
+
 // ContentLine is p as one unfolded content line ("EXDATE;TZID=Europe/Paris:20261112T100000").
 func ContentLine(p *ical.Prop) string { return contentLine(p) }
 

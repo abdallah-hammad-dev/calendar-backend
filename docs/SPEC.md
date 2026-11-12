@@ -91,7 +91,12 @@ notification) and in Obsidian, and my answer leaves from the address that was in
   page, by `add-feed`, and at the fetch: a feed in clear can be changed on the way), redirects go to `https://` only,
   no proxy from the environment, and the address dialled, once resolved, must be public (`icsfeed.publicOnly`: not
   private, loopback, link-local, CGNAT / Tailscale, NAT64 / 6to4…), which a name resolving elsewhere the second time
-  can't get around. `file://` only for tests (`Feed.Files`).
+  can't get around. `file://` only for tests (`Feed.Files`). **An all-day event Outlook's feed shifts** (2026-11-12,
+  `icsfeed.allDayAgain`, `bench/TESTS.md`): one Exchange keeps in UTC (an outside invitation, as Luma's) is shown
+  all day by Outlook but published from midnight UTC to midnight UTC in the publisher's zone, with
+  `X-MICROSOFT-CDO-ALLDAYEVENT:FALSE` (drawn 01:00 → 01:00 in Paris). An event of an Outlook feed (that property)
+  starting and ending at midnight UTC becomes all-day again on its UTC days. Not a series (its `RECURRENCE-ID`s,
+  `EXDATE`s and `UNTIL` would follow; none seen yet), nor other feeds (midnight UTC may be meant there).
 - **Google** (B2, 2026-10-23, `internal/adapter/google`): the account's main calendar, `events.list` with
   `showDeleted` (a cancelled occurrence is how Google says it was taken out of its series) and recurring events not
   expanded; `410` on a sync token → a full listing. A series comes whole: when any of its events changed, it is

@@ -325,11 +325,6 @@ func TestRRule(t *testing.T) {
 }
 
 func TestWindowsZones(t *testing.T) {
-	for win, iana := range windowsZones {
-		if _, err := time.LoadLocation(iana); err != nil {
-			t.Errorf("%s → %s: %v", win, iana, err)
-		}
-	}
 	if zoneOf("Romance Standard Time", nil).String() != "Europe/Paris" || zoneOf("Europe/Paris", nil).String() != "Europe/Paris" {
 		t.Fatal("zone not mapped")
 	}

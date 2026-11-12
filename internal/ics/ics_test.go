@@ -337,3 +337,21 @@ END:VCALENDAR
 		t.Fatalf("got %v without LAST-MODIFIED", got)
 	}
 }
+
+func TestOutlookZone(t *testing.T) {
+	for win, iana := range windowsZones {
+		if _, err := time.LoadLocation(iana); err != nil {
+			t.Errorf("%s → %s: %v", win, iana, err)
+		}
+	}
+	for name, want := range map[string]string{"Romance Standard Time": "Europe/Paris", "Europe/Paris": "Europe/Paris",
+		"UTC": "", "Etc/UTC": "", "": "", "tzone://Microsoft/Custom": ""} {
+		got := ""
+		if loc := OutlookZone(name); loc != nil {
+			got = loc.String()
+		}
+		if got != want {
+			t.Errorf("%q → %q, want %q", name, got, want)
+		}
+	}
+}
